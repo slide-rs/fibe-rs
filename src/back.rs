@@ -4,111 +4,140 @@
 
 use std::boxed::FnBox;
 use std::collections::HashMap;
-use std::sync::mpsc;
+use std::sync::Mutex;
 use std::thread;
-use {Handle, Request, Wait};
+use pulse::{Pulse, Trigger, Select, Barrier};
+
+use {Handle, Wait};
 
 
 struct Pending {
     task: Box<FnBox() + Send>,
-    dependencies: Vec<Handle>,
+    done: Trigger
 }
 
-struct Active {
-    link: thread::JoinHandle<()>,
+struct Inner {
+    exit: Option<Trigger>,
+    exit_method: Wait,
+
+    pending_select: Select,
+    pending: HashMap<usize, Pending>,
+
+    active_select: Select,
+    active: HashMap<usize, thread::JoinHandle<()>>
 }
 
 /// Task queue back-end.
 pub struct Backend {
-    output: mpsc::Sender<Request>,
-    pending: HashMap<Handle, Pending>,
-    active: HashMap<Handle, Active>,
+    inner: Mutex<Inner>
 }
 
 impl Backend {
     /// Create a new back-end.
-    pub fn new(output: mpsc::Sender<Request>) -> Backend {
+    pub fn new() -> Backend {
         Backend {
-            output: output,
-            pending: HashMap::new(),
-            active: HashMap::new(),
+            inner: Mutex::new(Inner{
+                exit: None,
+                exit_method: Wait::None,
+                pending_select: Select::new(),
+                pending: HashMap::new(),
+                active_select: Select::new(),
+                active: HashMap::new(),
+            })
         }
     }
 
-    fn is_queued(&self, h: &Handle) -> bool {
-        self.pending.contains_key(h) || self.active.contains_key(h)
-    }
+    fn launch(&self, pending: Pending) {
+        let (p, t0) = Pulse::new();
+        let Pending {
+            task,
+            done: t1
+        } = pending;
 
-    fn launch(&mut self, handle: Handle, task: Box<FnBox() + Send>) {
-        let output = self.output.clone();
-        self.active.insert(handle.clone(), Active {
-            link: thread::spawn(move || {
-                (task)();
-                let _ = output.send(Request::Done(handle));
-            }),
+        let thread = thread::spawn(move|| {
+            (task)();
+            t0.pulse();
+            t1.pulse();
         });
+
+        let mut guard = self.inner.lock().unwrap();
+        let id = guard.active_select.add(p);
+        guard.active.insert(id, thread);
     }
 
-    /// Register the addition of a new task.
-    fn on_new(&mut self, handle: Handle, deps: Vec<Handle>, task: Box<FnBox() + Send>) {
-        debug_assert!(!self.is_queued(&handle));
-        match deps.iter().find(|d| self.is_queued(d)) {
-            Some(_) => {
-                self.pending.insert(handle, Pending {
-                    task: task,
-                    dependencies: deps,
-                });
-            },
-            None => self.launch(handle, task),
+    pub fn start(&self, deps: Vec<Handle>, task: Box<FnBox() + Send>) -> Handle {
+        let barrier = Barrier::new(deps);
+        let pulse = barrier.pulse();
+
+        let (p, t) = Pulse::new();
+        let pending = Pending {
+            task: task,
+            done: t
+        };
+        if pulse.is_pending() {
+            let mut guard = self.inner.lock().unwrap();
+            let id = guard.pending_select.add(pulse);
+            guard.pending.insert(id, pending);
+        } else {
+            self.launch(pending);
         }
+        p
     }
 
-    /// Register the completion of a task.
-    fn on_done(&mut self, handle: Handle) {
-        // remove from the active list
-        if self.active.remove(&handle).is_none() {
-            error!("Finished handle was not active: {:?}", handle);
-        }
-        // gather items to be launched
-        let mut temp = Vec::new();
-        for (k, v) in self.pending.iter_mut() {
-            v.dependencies.retain(|h| *h != handle);
-            if v.dependencies.is_empty() {
-                temp.push(k.clone());
-            }
-        }
-        // launch new items
-        for h in temp.iter() {
-            let pending = self.pending.remove(h).unwrap();
-            self.launch(h.clone(), pending.task);
-        }
+    pub fn exit(&self, wait: Wait) {
+        let mut guard = self.inner.lock().unwrap();
+        guard.exit_method = wait;
+        let t = guard.exit.take().unwrap();
+        t.pulse();
     }
 
-    /// Run the main command dispatcher loop.
-    pub fn run(&mut self, input: mpsc::Receiver<Request>) {
-        let mut break_on_empty = false;
-        for request in input.iter() {
-            match request {
-                Request::New(handle, deps, task) => {
-                    self.on_new(handle, deps, task)
-                },
-                Request::Done(handle) => {
-                    self.on_done(handle);
-                    if break_on_empty && self.active.is_empty() {
-                        debug_assert!(self.pending.is_empty());
-                        break
+    pub fn run(&self, ack: Trigger) {
+        let (exit_p, exit) = Pulse::new();
+        let mut select = Select::new();
+        let exit_id = select.add(exit_p);
+        let (mut pending_id, mut active_id) = {
+            let mut guard = self.inner.lock().unwrap();
+            guard.exit = Some(exit);
+            (select.add(guard.pending_select.pulse()),
+             select.add(guard.active_select.pulse()))
+        };
+
+        ack.pulse();
+
+        let mut exit_method = None;
+        while let Some(pulse) = select.next() {
+            if pulse.id() == pending_id {
+                let mut guard = self.inner.lock().unwrap();
+                pending_id = select.add(guard.pending_select.pulse());
+                if let Some(pending) = guard.pending_select.try_next() {
+                    let task = guard.pending.remove(&pending.id()).unwrap();
+                    drop(guard);
+                    if exit_method != Some(Wait::Active) {
+                        self.launch(task);
                     }
-                },
-                Request::Stop(Wait::None) => break,
-                Request::Stop(Wait::Active) => {
-                    for (_, v) in self.active.drain() {
-                        let _ = v.link.join();
+                }
+            } else if pulse.id() == active_id {
+                let mut guard = self.inner.lock().unwrap();
+                active_id = select.add(guard.active_select.pulse());
+                if let Some(active) = guard.active_select.try_next() {
+                    let task = guard.active.remove(&active.id()).unwrap();
+                    let count = guard.active.len();
+                    task.join().unwrap();
+                    drop(guard);
+                    if count == 0 {
+                        match exit_method {
+                            Some(Wait::Active) |
+                            Some(Wait::Pending) => break,
+                            _ => ()
+                        }                        
                     }
-                    break
-                },
-                Request::Stop(Wait::Pending) => {
-                    break_on_empty = true
-                },
+                };
+            } else if exit_id == pulse.id() {
+                let guard = self.inner.lock().unwrap();
+                exit_method = Some(guard.exit_method);
+                if exit_method == Some(Wait::None) {
+                    break;
+                }
             }
         }
     }
