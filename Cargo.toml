@@ -12,3 +12,6 @@ name = "fibe"
 
 [dependencies]
 log = "*"
+
+[dependencies.pulse]
+git = "https://github.com/csherratt/pulse.git"
