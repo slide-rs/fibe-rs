@@ -56,8 +56,8 @@ impl Backend {
 
         let thread = thread::spawn(move|| {
             (task)();
-            t0.pulse();
-            t1.pulse();
+            t0.trigger();
+            t1.trigger();
         });
 
         let mut guard = self.inner.lock().unwrap();
@@ -88,7 +88,7 @@ impl Backend {
         let mut guard = self.inner.lock().unwrap();
         guard.exit_method = wait;
         let t = guard.exit.take().unwrap();
-        t.pulse();
+        t.trigger();
     }
 
     pub fn run(&self, ack: Trigger) {
@@ -102,7 +102,7 @@ impl Backend {
              select.add(guard.active_select.pulse()))
         };
 
-        ack.pulse();
+        ack.trigger();
 
         let mut exit_method = None;
         while let Some(pulse) = select.next() {
