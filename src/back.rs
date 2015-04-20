@@ -13,7 +13,8 @@ use {Handle, Wait};
 
 struct Pending {
     task: Box<FnBox() + Send>,
-    done: Trigger
+    trigger: Trigger,
+    done: Pulse
 }
 
 struct Inner {
@@ -48,16 +49,15 @@ impl Backend {
     }
 
     fn launch(&self, pending: Pending) {
-        let (p, t0) = Pulse::new();
         let Pending {
             task,
-            done: t1
+            trigger,
+            done: p
         } = pending;
 
         let thread = thread::spawn(move|| {
             (task)();
-            t0.trigger();
-            t1.trigger();
+            trigger.trigger();
         });
 
         let mut guard = self.inner.lock().unwrap();
@@ -65,15 +65,26 @@ impl Backend {
         guard.active.insert(id, thread);
     }
 
-    pub fn start(&self, deps: Vec<Handle>, task: Box<FnBox() + Send>) -> Handle {
-        let barrier = Barrier::new(deps);
-        let pulse = barrier.pulse();
-
+    pub fn start(&self, mut deps: Vec<Handle>, task: Box<FnBox() + Send>) -> Handle {
         let (p, t) = Pulse::new();
         let pending = Pending {
             task: task,
-            done: t
+            done: p.clone(),
+            trigger: t
         };
+
+        let pulse = if deps.len() == 0 {
+            // If no dependencies we should just start the task now
+            self.launch(pending);
+            return p;
+        } else if deps.len() == 1 {
+            // If only one, we can just use the handle in it's raw form
+            deps.pop().unwrap()
+        } else {
+            let barrier = Barrier::new(deps);
+            barrier.pulse()
+        };
+
         if pulse.is_pending() {
             let mut guard = self.inner.lock().unwrap();
             let id = guard.pending_select.add(pulse);
