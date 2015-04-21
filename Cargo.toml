@@ -1,11 +1,9 @@
 [package]
 name = "fibe"
-version = "0.0.1"
+version = "0.1.0"
 license = "Apache-2.0"
 keywords = ["gamedev"]
-authors = [
-"Dzmitry Malyshau <kvarkus@gmail.com>",
-]
+authors = ["Fibe-rs Hackers"]
 
 [lib]
 name = "fibe"
