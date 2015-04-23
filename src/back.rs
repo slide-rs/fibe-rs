@@ -6,19 +6,19 @@ use std::boxed::FnBox;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::thread;
-use pulse::{Pulse, Trigger, Select, Barrier};
+use pulse::*;
 
 use {Handle, Wait};
 
 
 struct Pending {
     task: Box<FnBox() + Send>,
-    trigger: Trigger,
-    done: Pulse
+    trigger: Pulse,
+    done: Signal
 }
 
 struct Inner {
-    exit: Option<Trigger>,
+    exit: Option<Pulse>,
     exit_method: Wait,
 
     pending_select: Select,
@@ -57,7 +57,7 @@ impl Backend {
 
         let thread = thread::spawn(move|| {
             (task)();
-            trigger.trigger();
+            trigger.pulse();
         });
 
         let mut guard = self.inner.lock().unwrap();
@@ -66,7 +66,7 @@ impl Backend {
     }
 
     pub fn start(&self, mut deps: Vec<Handle>, task: Box<FnBox() + Send>) -> Handle {
-        let (p, t) = Pulse::new();
+        let (p, t) = Signal::new();
         let pending = Pending {
             task: task,
             done: p.clone(),
@@ -81,8 +81,8 @@ impl Backend {
             // If only one, we can just use the handle in it's raw form
             deps.pop().unwrap()
         } else {
-            let barrier = Barrier::new(deps);
-            barrier.pulse()
+            let mut barrier = Barrier::new(deps);
+            barrier.signal()
         };
 
         if pulse.is_pending() {
@@ -99,27 +99,27 @@ impl Backend {
         let mut guard = self.inner.lock().unwrap();
         guard.exit_method = wait;
         let t = guard.exit.take().unwrap();
-        t.trigger();
+        t.pulse();
     }
 
-    pub fn run(&self, ack: Trigger) {
-        let (exit_p, exit) = Pulse::new();
+    pub fn run(&self, ack: Pulse) {
+        let (exit_p, exit) = Signal::new();
         let mut select = Select::new();
         let exit_id = select.add(exit_p);
         let (mut pending_id, mut active_id) = {
             let mut guard = self.inner.lock().unwrap();
             guard.exit = Some(exit);
-            (select.add(guard.pending_select.pulse()),
-             select.add(guard.active_select.pulse()))
+            (select.add(guard.pending_select.signal()),
+             select.add(guard.active_select.signal()))
         };
 
-        ack.trigger();
+        ack.pulse();
 
         let mut exit_method = None;
         while let Some(pulse) = select.next() {
             if pulse.id() == pending_id {
                 let mut guard = self.inner.lock().unwrap();
-                pending_id = select.add(guard.pending_select.pulse());
+                pending_id = select.add(guard.pending_select.signal());
                 if let Some(pending) = guard.pending_select.try_next() {
                     let task = guard.pending.remove(&pending.id()).unwrap();
                     drop(guard);
@@ -129,7 +129,7 @@ impl Backend {
                 }
             } else if pulse.id() == active_id {
                 let mut guard = self.inner.lock().unwrap();
-                active_id = select.add(guard.active_select.pulse());
+                active_id = select.add(guard.active_select.signal());
                 if let Some(active) = guard.active_select.try_next() {
                     let task = guard.active.remove(&active.id()).unwrap();
                     let count = guard.active.len();

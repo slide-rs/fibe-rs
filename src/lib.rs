@@ -7,7 +7,7 @@
 extern crate log;
 extern crate pulse;
 
-use pulse::Pulse;
+use pulse::Signal;
 
 mod back;
 mod front;
@@ -15,7 +15,7 @@ mod front;
 pub use self::front::Frontend;
 
 /// Task handle, used for referencing a task in flight.
-pub type Handle = Pulse;
+pub type Handle = Signal;
 
 #[derive(PartialEq, Copy, Clone, Debug)]
 /// Wait mode for the front-end termination.
