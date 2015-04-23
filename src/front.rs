@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 use std::thread;
-use pulse::Pulse;
+use pulse::*;
 use {Handle, Wait};
 use back::Backend;
 
@@ -20,7 +20,7 @@ impl Frontend {
     pub fn new() -> Frontend {
         let backend = Arc::new(Backend::new());
         let back = backend.clone();
-        let (p, t) = Pulse::new();
+        let (mut p, t) = Signal::new();
         let front = Frontend {
             backend: back,
             link: thread::spawn(move || {
