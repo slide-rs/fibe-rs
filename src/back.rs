@@ -3,7 +3,6 @@
 //! channel and starting new tasks when the time comes.
 
 use std::boxed::FnBox;
-use std::collections::HashMap;
 use std::sync::Mutex;
 use std::thread;
 use pulse::*;
@@ -20,12 +19,8 @@ struct Pending {
 struct Inner {
     exit: Option<Pulse>,
     exit_method: Wait,
-
-    pending_select: Select,
-    pending: HashMap<usize, Pending>,
-
-    active_select: Select,
-    active: HashMap<usize, thread::JoinHandle<()>>
+    pending: SelectMap<Pending>,
+    active: SelectMap<thread::JoinHandle<()>>
 }
 
 /// Task queue back-end.
@@ -40,10 +35,8 @@ impl Backend {
             inner: Mutex::new(Inner{
                 exit: None,
                 exit_method: Wait::None,
-                pending_select: Select::new(),
-                pending: HashMap::new(),
-                active_select: Select::new(),
-                active: HashMap::new(),
+                pending: SelectMap::new(),
+                active: SelectMap::new(),
             })
         }
     }
@@ -61,8 +54,7 @@ impl Backend {
         });
 
         let mut guard = self.inner.lock().unwrap();
-        let id = guard.active_select.add(p);
-        guard.active.insert(id, thread);
+        guard.active.add(p, thread);
     }
 
     pub fn start(&self, mut deps: Vec<Handle>, task: Box<FnBox() + Send>) -> Handle {
@@ -87,8 +79,7 @@ impl Backend {
 
         if pulse.is_pending() {
             let mut guard = self.inner.lock().unwrap();
-            let id = guard.pending_select.add(pulse);
-            guard.pending.insert(id, pending);
+            guard.pending.add(pulse, pending);
         } else {
             self.launch(pending);
         }
@@ -109,8 +100,8 @@ impl Backend {
         let (mut pending_id, mut active_id) = {
             let mut guard = self.inner.lock().unwrap();
             guard.exit = Some(exit);
-            (select.add(guard.pending_select.signal()),
-             select.add(guard.active_select.signal()))
+            (select.add(guard.pending.signal()),
+             select.add(guard.active.signal()))
         };
 
         ack.pulse();
@@ -119,9 +110,8 @@ impl Backend {
         while let Some(pulse) = select.next() {
             if pulse.id() == pending_id {
                 let mut guard = self.inner.lock().unwrap();
-                pending_id = select.add(guard.pending_select.signal());
-                if let Some(pending) = guard.pending_select.try_next() {
-                    let task = guard.pending.remove(&pending.id()).unwrap();
+                pending_id = select.add(guard.pending.signal());
+                if let Some((_, task)) = guard.pending.try_next() {
                     drop(guard);
                     if exit_method != Some(Wait::Active) {
                         self.launch(task);
@@ -129,12 +119,11 @@ impl Backend {
                 }
             } else if pulse.id() == active_id {
                 let mut guard = self.inner.lock().unwrap();
-                active_id = select.add(guard.active_select.signal());
-                if let Some(active) = guard.active_select.try_next() {
-                    let task = guard.active.remove(&active.id()).unwrap();
+                active_id = select.add(guard.active.signal());
+                if let Some((_, task)) = guard.active.try_next() {
                     let count = guard.active.len();
-                    task.join().unwrap();
                     drop(guard);
+                    task.join().unwrap();
                     if count == 0 {
                         match exit_method {
                             Some(Wait::Active) |
