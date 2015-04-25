@@ -23,6 +23,23 @@ struct Inner {
     active: SelectMap<thread::JoinHandle<()>>
 }
 
+impl Inner {
+    fn launch(&mut self, pending: Pending) {
+        let Pending {
+            task,
+            trigger,
+            done: p
+        } = pending;
+
+        let thread = thread::spawn(move|| {
+            (task)();
+            trigger.pulse();
+        });
+
+        self.active.add(p, thread);
+    }
+}
+
 /// Task queue back-end.
 pub struct Backend {
     inner: Mutex<Inner>
@@ -41,22 +58,6 @@ impl Backend {
         }
     }
 
-    fn launch(&self, pending: Pending) {
-        let Pending {
-            task,
-            trigger,
-            done: p
-        } = pending;
-
-        let thread = thread::spawn(move|| {
-            (task)();
-            trigger.pulse();
-        });
-
-        let mut guard = self.inner.lock().unwrap();
-        guard.active.add(p, thread);
-    }
-
     pub fn start(&self, mut deps: Vec<Handle>, task: Box<FnBox() + Send>) -> Handle {
         let (p, t) = Signal::new();
         let pending = Pending {
@@ -66,9 +67,9 @@ impl Backend {
         };
 
         let pulse = if deps.len() == 0 {
-            // If no dependencies we should just start the task now
-            self.launch(pending);
-            return p;
+            let (pulse, t) = Signal::new();
+            t.pulse();
+            pulse
         } else if deps.len() == 1 {
             // If only one, we can just use the handle in it's raw form
             deps.pop().unwrap()
@@ -77,11 +78,11 @@ impl Backend {
             barrier.signal()
         };
 
+        let mut guard = self.inner.lock().unwrap();
         if pulse.is_pending() {
-            let mut guard = self.inner.lock().unwrap();
             guard.pending.add(pulse, pending);
         } else {
-            self.launch(pending);
+            guard.launch(pending);
         }
         p
     }
@@ -104,40 +105,34 @@ impl Backend {
              select.add(guard.active.signal()))
         };
 
+        // Tell the caller that we have started
         ack.pulse();
 
         let mut exit_method = None;
         while let Some(pulse) = select.next() {
+            let mut guard = self.inner.lock().unwrap();
+
             if pulse.id() == pending_id {
-                let mut guard = self.inner.lock().unwrap();
                 pending_id = select.add(guard.pending.signal());
                 if let Some((_, task)) = guard.pending.try_next() {
-                    drop(guard);
                     if exit_method != Some(Wait::Active) {
-                        self.launch(task);
+                        guard.launch(task);
                     }
                 }
             } else if pulse.id() == active_id {
-                let mut guard = self.inner.lock().unwrap();
                 active_id = select.add(guard.active.signal());
                 if let Some((_, task)) = guard.active.try_next() {
-                    let count = guard.active.len();
-                    drop(guard);
                     task.join().unwrap();
-                    if count == 0 {
-                        match exit_method {
-                            Some(Wait::Active) |
-                            Some(Wait::Pending) => break,
-                            _ => ()
-                        }                        
-                    }
                 };
             } else if exit_id == pulse.id() {
-                let guard = self.inner.lock().unwrap();
                 exit_method = Some(guard.exit_method);
-                if exit_method == Some(Wait::None) {
-                    break;
-                }
+            }
+
+            match (exit_method, guard.pending.len(), guard.active.len()) {
+                (Some(Wait::None), _, _) => break,
+                (Some(Wait::Active), _, 0) => break,
+                (Some(Wait::Pending), 0, 0) => break,
+                _ => ()
             }
         }
     }
