@@ -20,7 +20,7 @@ impl Frontend {
     pub fn new() -> Frontend {
         let backend = Arc::new(Backend::new());
         let back = backend.clone();
-        let (mut p, t) = Signal::new();
+        let (p, t) = Signal::new();
         let front = Frontend {
             backend: back,
             link: thread::spawn(move || {

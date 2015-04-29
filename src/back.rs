@@ -74,7 +74,7 @@ impl Backend {
             // If only one, we can just use the handle in it's raw form
             deps.pop().unwrap()
         } else {
-            let mut barrier = Barrier::new(deps);
+            let barrier = Barrier::new(deps);
             barrier.signal()
         };
 
