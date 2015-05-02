@@ -6,6 +6,7 @@
 #[macro_use]
 extern crate log;
 extern crate pulse;
+extern crate atom;
 
 use pulse::Signal;
 
