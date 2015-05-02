@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use {Handle, Wait};
 use back::Backend;
-use pulse::{Signals, Barrier};
+use pulse::Signal;
 
 
 /// Queue front-end.
@@ -27,20 +27,9 @@ impl Frontend {
     /// Add a new task with selected dependencies. This doesn't interrupt any
     /// tasks in-flight. The task will actually start as soon as all dependencies
     /// are finished.
-    pub fn add<F: FnOnce() + Send + 'static>(&mut self, task: F, mut deps: Vec<Handle>)
-               -> Handle {
-
-        let pulse = if deps.len() == 1 {
-            // If only one, we can just use the handle in it's raw form
-            Some(deps.pop().unwrap())
-        } else if deps.len() > 0 {
-            let barrier = Barrier::new(deps);
-            Some(barrier.signal())
-        } else {
-            None
-        };
-
-        self.backend.start(Box::new(task), pulse)
+    pub fn add<F>(&mut self, task: F, signal: Option<Signal>) -> Handle 
+        where F: FnOnce() + Send + 'static {
+        self.backend.start(Box::new(task), signal)
     }
 
     /// Stop the queue, using selected wait mode.

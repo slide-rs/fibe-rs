@@ -32,7 +32,7 @@ fn die_all_active_none() {
     timeout_ms(|| {
         let mut front = fibe::Frontend::new();
         for _ in 0..10 {
-            front.add(move || {}, vec![]);
+            front.add(move || {}, None);
         }
         front.die(fibe::Wait::None);
     }, 3000);
@@ -43,7 +43,7 @@ fn die_all_active_pending() {
     timeout_ms(|| {
         let mut front = fibe::Frontend::new();
         for _ in 0..10 {
-            front.add(move || {}, vec![]);
+            front.add(move || {}, None);
         }
         front.die(fibe::Wait::Pending);
     }, 3000);
@@ -54,7 +54,7 @@ fn die_all_active_active() {
     timeout_ms(|| {
         let mut front = fibe::Frontend::new();
         for _ in 0..10 {
-            front.add(move || {}, vec![]);
+            front.add(move || {}, None);
         }
         front.die(fibe::Wait::Active);
     }, 3000);
@@ -64,9 +64,9 @@ fn die_all_active_active() {
 fn die_pending_chain_none() {
     timeout_ms(|| {
         let mut front = fibe::Frontend::new();
-        let mut last = front.add(move || {}, vec![]);
+        let mut last = front.add(move || {}, None);
         for _ in 1..10 {
-            last = front.add(move || {}, vec![last]);
+            last = front.add(move || {}, Some(last));
         }
         front.die(fibe::Wait::None);
     }, 3000);
@@ -76,9 +76,9 @@ fn die_pending_chain_none() {
 fn die_pending_chain_pending() {
     timeout_ms(|| {
         let mut front = fibe::Frontend::new();
-        let mut last = front.add(move || {}, vec![]);
+        let mut last = front.add(move || {}, None);
         for _ in 1..10 {
-            last = front.add(move || {}, vec![last]);
+            last = front.add(move || {}, Some(last));
         }
         front.die(fibe::Wait::Pending);
     }, 3000);
@@ -88,9 +88,9 @@ fn die_pending_chain_pending() {
 fn die_pending_chain_active() {
     timeout_ms(|| {
         let mut front = fibe::Frontend::new();
-        let mut last = front.add(move || {}, vec![]);
+        let mut last = front.add(move || {}, None);
         for _ in 1..10 {
-            last = front.add(move || {}, vec![last]);
+            last = front.add(move || {}, Some(last));
         }
         front.die(fibe::Wait::Active);
     }, 3000);

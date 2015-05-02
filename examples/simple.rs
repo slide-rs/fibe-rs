@@ -2,8 +2,8 @@ extern crate fibe;
 
 fn test(wait: fibe::Wait) {
     let mut front = fibe::Frontend::new();
-    let ha = front.add(move || {print!("Hello, ")}, vec![]);
-    let hb = front.add(move || {println!("world")}, vec![ha]);
+    let ha = front.add(move || {print!("Hello, ")}, None);
+    let hb = front.add(move || {println!("world")}, Some(ha));
     let _ = hb;
     front.die(wait);
 }
