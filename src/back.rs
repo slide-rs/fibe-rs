@@ -67,22 +67,11 @@ impl Backend {
 
     /// Start a task that will run once all the Handle's have
     /// been completed.
-    pub fn start(&self, mut deps: Vec<Handle>, task: Box<FnBox() + Send>) -> Handle {
-        let (signal, complete) = Signal::new();
-
-        let pulse = if deps.len() == 0 {
-            let (pulse, t) = Signal::new();
-            t.pulse();
-            pulse
-        } else if deps.len() == 1 {
-            // If only one, we can just use the handle in it's raw form
-            deps.pop().unwrap()
-        } else {
-            let barrier = Barrier::new(deps);
-            barrier.signal()
-        };
-
+    pub fn start(&self, task: Box<FnBox() + Send>, wait: Option<Signal>) -> Handle {
         let inner = self.inner.clone();
+        let (signal, complete) = Signal::new();
+        let pulse = wait.unwrap_or_else(|| Signal::pulsed());
+
         pulse.callback(move || {
             if inner.try_active_inc() {
                 thread::spawn(move || {
@@ -93,6 +82,7 @@ impl Backend {
                 });
             }
         });
+
         signal
     }
 
