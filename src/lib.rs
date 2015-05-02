@@ -49,27 +49,27 @@ pub enum WaitState {
 pub trait ResumableTask {
     /// Run your task logic, you must return a WaitState
     /// to yield to the scheduler.
-    fn resume(&mut self, add: &mut FnMut(Box<Task>, Option<Signal>)) -> WaitState;
+    fn resume(&mut self) -> WaitState;
 }
 
 /// The building block of a task
 pub trait Task {
     /// Run the task consuming it
-    fn run(self: Box<Self>, add: &mut FnMut(Box<Task>, Option<Signal>));
+    fn run(self: Box<Self>);
 }
 
-impl<T> Task for T where T: ResumableTask + 'static {
-    fn run(mut self: Box<Self>, add: &mut FnMut(Box<Task>, Option<Signal>)) {
+/*impl<T> Task for T where T: ResumableTask + Send + 'static {
+    fn run(mut self: Box<Self>) {
         match self.resume(add) {
-            WaitState::Ready => add(self, None),
-            WaitState::Pending(signal) => add(self, Some(signal)),
+            WaitState::Ready => { add(self, None); },
+            WaitState::Pending(signal) => { add(self, Some(signal)); },
             WaitState::Completed => (),
         }
     }
-}
+}*/
 
-impl Task for FnBox(&mut FnMut(Box<Task>, Option<Signal>)) + 'static {
-    fn run(self: Box<Self>, add: &mut FnMut(Box<Task>, Option<Signal>)) {
-        self.call_box((add,))
+impl<F> Task for F where F: FnBox() + Send + 'static {
+    fn run(self: Box<Self>) {
+        self.call_box(())
     }
 }

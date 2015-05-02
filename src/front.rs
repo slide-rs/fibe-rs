@@ -2,6 +2,7 @@
 //! on the user side, allowing to add more tasks to the queue.
 
 use std::sync::Arc;
+use std::boxed::FnBox;
 use {Handle, Wait};
 use back::Backend;
 use pulse::Signal;
@@ -28,8 +29,9 @@ impl Frontend {
     /// tasks in-flight. The task will actually start as soon as all dependencies
     /// are finished.
     pub fn add<F>(&mut self, task: F, signal: Option<Signal>) -> Handle 
-        where F: FnOnce() + Send + 'static {
-        self.backend.start(Box::new(task), signal)
+        where F: FnBox() + Send + 'static {
+
+        Backend::start(self.backend.clone(), Box::new(task), signal)
     }
 
     /// Stop the queue, using selected wait mode.

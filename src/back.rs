@@ -2,25 +2,33 @@
 //! on a separate thread. All it does is listening to a command
 //! channel and starting new tasks when the time comes.
 
-use std::boxed::FnBox;
 use std::thread;
 use std::sync::atomic::*;
 use std::sync::Arc;
 use atom::*;
 use pulse::*;
 
-use {Handle, Wait};
+use {Handle, Wait, Task};
 
 // Todo 64bit verison
 const BLOCK: usize = 0x8000_0000;
 const REF_COUNT: usize = 0x7FFF_FFFF;
 
-struct Inner {
+/// Task queue back-end.
+pub struct Backend {
     active: AtomicUsize,
     work_done: Atom<Pulse>
 }
 
-impl Inner {
+impl Backend {
+    /// Create a new back-end.
+    pub fn new() -> Backend {
+        Backend {
+            active: AtomicUsize::new(0),
+            work_done: Atom::empty()
+        }
+    }
+
     /// Check to see if the scheduler has put a hold on the
     /// starting of new tasks (occurs during shutdown)
     fn try_active_inc(&self) -> bool {
@@ -47,28 +55,10 @@ impl Inner {
             self.work_done.take().map(|p| p.pulse());
         }
     }
-}
-
-/// Task queue back-end.
-pub struct Backend {
-    inner: Arc<Inner>
-}
-
-impl Backend {
-    /// Create a new back-end.
-    pub fn new() -> Backend {
-        Backend {
-            inner: Arc::new(Inner{
-                active: AtomicUsize::new(0),
-                work_done: Atom::empty()
-            })
-        }
-    }
 
     /// Start a task that will run once all the Handle's have
     /// been completed.
-    pub fn start(&self, task: Box<FnBox() + Send>, wait: Option<Signal>) -> Handle {
-        let inner = self.inner.clone();
+    pub fn start(inner: Arc<Backend>, task: Box<Task+Send>, wait: Option<Signal>) -> Handle {
         let (signal, complete) = Signal::new();
         let pulse = wait.unwrap_or_else(|| Signal::pulsed());
 
@@ -76,7 +66,9 @@ impl Backend {
             if inner.try_active_inc() {
                 thread::spawn(move || {
                     let inner = inner;
-                    task();
+                    task.run(/*&mut |task, wait| {
+                        Backend::start(inner.clone(), task, wait)
+                    }*/);
                     complete.pulse();
                     inner.active_dec();
                 });
@@ -92,7 +84,7 @@ impl Backend {
         // Install the pulse (if needed)
         match wait {
             Wait::Active | Wait::Pending => {
-                self.inner.work_done.swap(pulse);
+                self.work_done.swap(pulse);
             }
             Wait::None => {
                 pulse.pulse()
@@ -103,10 +95,10 @@ impl Backend {
         // flag if needed for the wait
         let count = match wait {
             Wait::None | Wait::Active => {
-                self.inner.active.fetch_or(BLOCK, Ordering::SeqCst)
+                self.active.fetch_or(BLOCK, Ordering::SeqCst)
             }
             Wait::Pending => {
-                self.inner.active.load(Ordering::SeqCst)
+                self.active.load(Ordering::SeqCst)
             }
         };
 
