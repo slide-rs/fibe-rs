@@ -2,8 +2,6 @@
 //! on the user side, allowing to add more tasks to the queue.
 
 use std::sync::Arc;
-use std::thread;
-use pulse::*;
 use {Handle, Wait};
 use back::Backend;
 
@@ -11,7 +9,6 @@ use back::Backend;
 /// Queue front-end.
 pub struct Frontend {
     backend: Arc<Backend>,
-    link: thread::JoinHandle<()>,
 }
 
 impl Frontend {
@@ -20,14 +17,9 @@ impl Frontend {
     pub fn new() -> Frontend {
         let backend = Arc::new(Backend::new());
         let back = backend.clone();
-        let (mut p, t) = Signal::new();
         let front = Frontend {
             backend: back,
-            link: thread::spawn(move || {
-                backend.run(t);
-            }),
         };
-        p.wait().unwrap();
         front
     }
 
@@ -42,6 +34,6 @@ impl Frontend {
     /// Stop the queue, using selected wait mode.
     pub fn die(self, wait: Wait) -> bool {
         self.backend.exit(wait);
-        self.link.join().is_ok()
+        true
     }
 }

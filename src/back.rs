@@ -3,68 +3,66 @@
 //! channel and starting new tasks when the time comes.
 
 use std::boxed::FnBox;
-use std::sync::Mutex;
 use std::thread;
+use std::sync::atomic::*;
+use std::sync::Arc;
+use atom::*;
 use pulse::*;
 
 use {Handle, Wait};
 
-
-struct Pending {
-    task: Box<FnBox() + Send>,
-    trigger: Pulse,
-    done: Signal
-}
+// Todo 64bit verison
+const BLOCK: usize = 0x8000_0000;
+const REF_COUNT: usize = 0x7FFF_FFFF;
 
 struct Inner {
-    exit: Option<Pulse>,
-    exit_method: Wait,
-    pending: SelectMap<Pending>,
-    active: SelectMap<thread::JoinHandle<()>>
+    active: AtomicUsize,
+    work_done: Atom<Pulse>
 }
 
 impl Inner {
-    fn launch(&mut self, pending: Pending) {
-        let Pending {
-            task,
-            trigger,
-            done: p
-        } = pending;
+    fn try_active_inc(&self) -> bool {
+        loop {
+            let value = self.active.load(Ordering::SeqCst);
+            if value & BLOCK == BLOCK {
+                return false;
+            }
 
-        let thread = thread::spawn(move|| {
-            (task)();
-            trigger.pulse();
-        });
+            // This is used instead of a fetch_add to allow for checking of the
+            // block flag
+            if value == self.active.compare_and_swap(value, value + 1, Ordering::SeqCst) {
+                return true;
+            }
+        }
+    }
 
-        self.active.add(p, thread);
+    fn active_dec(&self) {
+        // This should not effect the flags
+        let count = self.active.fetch_sub(1, Ordering::SeqCst);
+        if count & REF_COUNT == 1 {
+            self.work_done.take().map(|p| p.pulse());
+        }
     }
 }
 
 /// Task queue back-end.
 pub struct Backend {
-    inner: Mutex<Inner>
+    inner: Arc<Inner>
 }
 
 impl Backend {
     /// Create a new back-end.
     pub fn new() -> Backend {
         Backend {
-            inner: Mutex::new(Inner{
-                exit: None,
-                exit_method: Wait::None,
-                pending: SelectMap::new(),
-                active: SelectMap::new(),
+            inner: Arc::new(Inner{
+                active: AtomicUsize::new(0),
+                work_done: Atom::empty()
             })
         }
     }
 
     pub fn start(&self, mut deps: Vec<Handle>, task: Box<FnBox() + Send>) -> Handle {
-        let (p, t) = Signal::new();
-        let pending = Pending {
-            task: task,
-            done: p.clone(),
-            trigger: t
-        };
+        let (signal, complete) = Signal::new();
 
         let pulse = if deps.len() == 0 {
             let (pulse, t) = Signal::new();
@@ -74,66 +72,49 @@ impl Backend {
             // If only one, we can just use the handle in it's raw form
             deps.pop().unwrap()
         } else {
-            let mut barrier = Barrier::new(deps);
+            let barrier = Barrier::new(deps);
             barrier.signal()
         };
 
-        let mut guard = self.inner.lock().unwrap();
-        if pulse.is_pending() {
-            guard.pending.add(pulse, pending);
-        } else {
-            guard.launch(pending);
-        }
-        p
+        let inner = self.inner.clone();
+        pulse.callback(move || {
+            if inner.try_active_inc() {
+                thread::spawn(move || {
+                    let inner = inner;
+                    task();
+                    complete.pulse();
+                    inner.active_dec();
+                });
+            }
+        });
+        signal
     }
 
     pub fn exit(&self, wait: Wait) {
-        let mut guard = self.inner.lock().unwrap();
-        guard.exit_method = wait;
-        let t = guard.exit.take().unwrap();
-        t.pulse();
-    }
+        let (signal, pulse) = Signal::new();
+        // Install the pulse (if needed)
+        match wait {
+            Wait::Active | Wait::Pending => {
+                self.inner.work_done.swap(pulse);
+            }
+            Wait::None => {
+                pulse.pulse()
+            }
+        }
 
-    pub fn run(&self, ack: Pulse) {
-        let (exit_p, exit) = Signal::new();
-        let mut select = Select::new();
-        let exit_id = select.add(exit_p);
-        let (mut pending_id, mut active_id) = {
-            let mut guard = self.inner.lock().unwrap();
-            guard.exit = Some(exit);
-            (select.add(guard.pending.signal()),
-             select.add(guard.active.signal()))
+        let count = match wait {
+            Wait::None | Wait::Active => {
+                self.inner.active.fetch_or(BLOCK, Ordering::SeqCst)
+            }
+            Wait::Pending => {
+                self.inner.active.load(Ordering::SeqCst)
+            }
         };
 
-        // Tell the caller that we have started
-        ack.pulse();
-
-        let mut exit_method = None;
-        while let Some(pulse) = select.next() {
-            let mut guard = self.inner.lock().unwrap();
-
-            if pulse.id() == pending_id {
-                pending_id = select.add(guard.pending.signal());
-                if let Some((_, task)) = guard.pending.try_next() {
-                    if exit_method != Some(Wait::Active) {
-                        guard.launch(task);
-                    }
-                }
-            } else if pulse.id() == active_id {
-                active_id = select.add(guard.active.signal());
-                if let Some((_, task)) = guard.active.try_next() {
-                    task.join().unwrap();
-                };
-            } else if exit_id == pulse.id() {
-                exit_method = Some(guard.exit_method);
-            }
-
-            match (exit_method, guard.pending.len(), guard.active.len()) {
-                (Some(Wait::None), _, _) => break,
-                (Some(Wait::Active), _, 0) => break,
-                (Some(Wait::Pending), 0, 0) => break,
-                _ => ()
-            }
+        if count & REF_COUNT == 0 {
+            return;
+        } else {
+            signal.wait().unwrap();
         }
     }
 }

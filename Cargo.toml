@@ -10,6 +10,11 @@ name = "fibe"
 
 [dependencies]
 log = "*"
+atom = "*"
 
 [dependencies.pulse]
 git = "https://github.com/csherratt/pulse.git"
+features = ["callback"]
+
+[dev-dependencies]
+timebomb = "*"
