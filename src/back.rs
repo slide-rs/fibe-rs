@@ -21,6 +21,8 @@ struct Inner {
 }
 
 impl Inner {
+    /// Check to see if the scheduler has put a hold on the
+    /// starting of new tasks (occurs during shutdown)
     fn try_active_inc(&self) -> bool {
         loop {
             let value = self.active.load(Ordering::SeqCst);
@@ -36,6 +38,8 @@ impl Inner {
         }
     }
 
+    /// Decrement the active count, wakeing up scheduler
+    /// if you were the last running task.
     fn active_dec(&self) {
         // This should not effect the flags
         let count = self.active.fetch_sub(1, Ordering::SeqCst);
@@ -61,6 +65,8 @@ impl Backend {
         }
     }
 
+    /// Start a task that will run once all the Handle's have
+    /// been completed.
     pub fn start(&self, mut deps: Vec<Handle>, task: Box<FnBox() + Send>) -> Handle {
         let (signal, complete) = Signal::new();
 
@@ -90,6 +96,7 @@ impl Backend {
         signal
     }
 
+    /// Kill the backend, wait until the condition is satisfied.
     pub fn exit(&self, wait: Wait) {
         let (signal, pulse) = Signal::new();
         // Install the pulse (if needed)
@@ -102,6 +109,8 @@ impl Backend {
             }
         }
 
+        // read the current active count, OR in the BLOCK
+        // flag if needed for the wait
         let count = match wait {
             Wait::None | Wait::Active => {
                 self.inner.active.fetch_or(BLOCK, Ordering::SeqCst)
@@ -111,6 +120,7 @@ impl Backend {
             }
         };
 
+        // Wait until the count is equal to 0.
         if count & REF_COUNT == 0 {
             return;
         } else {
