@@ -8,7 +8,7 @@ use std::sync::Arc;
 use atom::*;
 use pulse::*;
 
-use {Handle, Wait, Task};
+use {Handle, Wait, Task, Schedule};
 
 // Todo 64bit verison
 const BLOCK: usize = 0x8000_0000;
@@ -66,9 +66,7 @@ impl Backend {
             if inner.try_active_inc() {
                 thread::spawn(move || {
                     let inner = inner;
-                    task.run(/*&mut |task, wait| {
-                        Backend::start(inner.clone(), task, wait)
-                    }*/);
+                    task.run(&inner);
                     complete.pulse();
                     inner.active_dec();
                 });
@@ -108,5 +106,11 @@ impl Backend {
         } else {
             signal.wait().unwrap();
         }
+    }
+}
+
+impl Schedule for Arc<Backend> {
+    fn add_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
+        Backend::start(self.clone(), t, signal)
     }
 }

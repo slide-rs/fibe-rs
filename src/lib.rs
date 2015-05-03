@@ -15,7 +15,7 @@ use pulse::Signal;
 mod back;
 mod front;
 
-pub use self::front::Frontend;
+pub use self::front::{Frontend, Schedule, ScheduleClosure};
 
 /// Task handle, used for referencing a task in flight.
 pub type Handle = Signal;
@@ -49,27 +49,27 @@ pub enum WaitState {
 pub trait ResumableTask {
     /// Run your task logic, you must return a WaitState
     /// to yield to the scheduler.
-    fn resume(&mut self) -> WaitState;
+    fn resume(&mut self, sched: &Schedule) -> WaitState;
 }
 
 /// The building block of a task
 pub trait Task {
     /// Run the task consuming it
-    fn run(self: Box<Self>);
+    fn run(self: Box<Self>, sched: &Schedule);
 }
 
-/*impl<T> Task for T where T: ResumableTask + Send + 'static {
-    fn run(mut self: Box<Self>) {
-        match self.resume(add) {
-            WaitState::Ready => { add(self, None); },
-            WaitState::Pending(signal) => { add(self, Some(signal)); },
+impl<T> Task for T where T: ResumableTask + Send + 'static {
+    fn run(mut self: Box<Self>, sched: &Schedule) {
+        match self.resume(sched) {
+            WaitState::Ready => { sched.add_task(self, None); },
+            WaitState::Pending(signal) => { sched.add_task(self, Some(signal)); },
             WaitState::Completed => (),
         }
     }
-}*/
+}
 
-impl<F> Task for F where F: FnBox() + Send + 'static {
-    fn run(self: Box<Self>) {
-        self.call_box(())
+impl Task for Box<FnBox(&Schedule) + Send + 'static> {
+    fn run(self: Box<Self>, sched: &Schedule) {
+        self.call_box((sched,))
     }
 }

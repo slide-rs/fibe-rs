@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 use std::boxed::FnBox;
-use {Handle, Wait};
+use {Handle, Wait, Task};
 use back::Backend;
 use pulse::Signal;
 
@@ -25,18 +25,52 @@ impl Frontend {
         front
     }
 
-    /// Add a new task with selected dependencies. This doesn't interrupt any
-    /// tasks in-flight. The task will actually start as soon as all dependencies
-    /// are finished.
-    pub fn add<F>(&mut self, task: F, signal: Option<Signal>) -> Handle 
-        where F: FnBox() + Send + 'static {
-
-        Backend::start(self.backend.clone(), Box::new(task), signal)
-    }
-
     /// Stop the queue, using selected wait mode.
     pub fn die(self, wait: Wait) -> bool {
         self.backend.exit(wait);
         true
     }
+}
+
+/// Abstract representation of a the scheduler, allow for new tasks
+/// to be created and enqueued.
+pub trait Schedule {
+    /// Add a new task with selected dependencies. This doesn't interrupt any
+    /// tasks in-flight. The task will actually start as soon as all dependencies
+    /// are finished.
+    fn add_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle;
+}
+
+impl Schedule for Frontend {
+    fn add_task(&self, task: Box<Task+Send>, signal: Option<Signal>) -> Handle {
+        Backend::start(self.backend.clone(), task, signal)
+    }
+}
+
+/// This is a utility trait used to allow the Schedule to be object safe
+/// but allow for polymorphic closures to be applied to it
+pub trait ScheduleClosure {
+    /// Add a new closure with selected dependencies. This doesn't interrupt any
+    /// tasks in-flight. The task will actually start as soon as all dependencies
+    /// are finished.
+    fn add<F>(&self, task: F, signal: Option<Signal>) -> Handle
+        where F: FnOnce(&Schedule) + Send + 'static;
+}
+
+impl<T> ScheduleClosure for T where T: Schedule {
+    fn add<F>(&self, task: F, signal: Option<Signal>) -> Handle
+        where F: FnOnce(&Schedule) + Send + 'static {
+
+        let task: Box<FnBox(&Schedule)+Send+'static> = Box::new(task);
+        self.add_task(Box::new(task), signal)
+    }
+}
+
+impl<'a> ScheduleClosure for &'a Schedule {
+    fn add<F>(&self, task: F, signal: Option<Signal>) -> Handle
+        where F: FnOnce(&Schedule) + Send + 'static {
+
+        let task: Box<FnBox(&Schedule)+Send+'static> = Box::new(task);
+        self.add_task(Box::new(task), signal)
+    } 
 }
