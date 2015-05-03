@@ -116,7 +116,6 @@ struct CountDown(u32, Sender<()>);
 
 impl Drop for CountDown {
     fn drop(&mut self) {
-        println!("Drop CountDown({})", self.0);
         self.1.send(()).unwrap();
         assert!(self.0 == 0);
     }
@@ -124,8 +123,7 @@ impl Drop for CountDown {
 
 impl ResumableTask for CountDown {
     fn resume(&mut self, sched: &mut Schedule) -> WaitState {
-        println!("{}", self.0);
-        if self.0 == 1 {
+        if self.0 == 0 {
             WaitState::Completed
         } else {
             self.0 -= 1;

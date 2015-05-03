@@ -8,10 +8,8 @@ use Schedule;
 pub enum WaitState {
     /// The Task is ready to run - can be scheduled immediately
     Ready,
-
     /// The Task has completed and can be deleted
     Completed,
-
     /// The Task is pending on a signal.
     Pending(Signal)
 }
@@ -33,8 +31,8 @@ pub trait Task {
 impl<T> Task for T where T: ResumableTask + Send + 'static {
     fn run(mut self: Box<Self>, sched: &mut Schedule) {
         match self.resume(sched) {
-            WaitState::Ready => { sched.add_task(self, None); },
-            WaitState::Pending(signal) => { sched.add_task(self, Some(signal)); },
+            WaitState::Ready => { sched.add_child_task(self, None); },
+            WaitState::Pending(signal) => { sched.add_child_task(self, Some(signal)); },
             WaitState::Completed => (),
         }
     }

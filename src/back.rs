@@ -62,11 +62,11 @@ impl Backend {
         let (signal, complete) = Signal::new();
         let pulse = wait.unwrap_or_else(|| Signal::pulsed());
 
-        let ack = DoneAck::new(complete);
+        let ack = Arc::new(DoneAck::new(complete));
         pulse.callback(move || {
             if back.try_active_inc() {
                 thread::spawn(move || {
-                    let mut back = (back, Some(ack));
+                    let mut back = (back, ack);
                     task.run((&mut back) as &mut Schedule);
                     back.0.active_dec();
                 });
@@ -74,6 +74,22 @@ impl Backend {
         });
 
         signal
+    }
+
+    /// Start a task that will run once all the Handle's have
+    /// been completed.
+    pub fn start_child(back: Arc<Backend>, task: Box<Task+Send>,
+                       wait: Option<Signal>, ack: Arc<DoneAck>) {
+        let pulse = wait.unwrap_or_else(|| Signal::pulsed());
+        pulse.callback(move || {
+            if back.try_active_inc() {
+                thread::spawn(move || {
+                    let mut back = (back, ack);
+                    task.run((&mut back) as &mut Schedule);
+                    back.0.active_dec();
+                });
+            }
+        });
     }
 
     /// Kill the backend, wait until the condition is satisfied.
@@ -109,15 +125,23 @@ impl Backend {
     }
 }
 
-impl Schedule for (Arc<Backend>, Option<DoneAck>)  {
+impl Schedule for (Arc<Backend>, Arc<DoneAck>)  {
     fn add_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
         Backend::start(self.0.clone(), t, signal)
     }
+
+    fn add_child_task(&self, t: Box<Task+Send>, signal: Option<Signal>) {
+        Backend::start_child(self.0.clone(), t, signal, self.1.clone())
+    }
 }
 
-impl<'a> Schedule for &'a mut (Arc<Backend>, Option<DoneAck>)  {
+impl<'a> Schedule for &'a mut (Arc<Backend>, Arc<DoneAck>)  {
     fn add_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
         Backend::start(self.0.clone(), t, signal)
+    }
+
+    fn add_child_task(&self, t: Box<Task+Send>, signal: Option<Signal>) {
+        Backend::start_child(self.0.clone(), t, signal, self.1.clone())
     }
 }
 

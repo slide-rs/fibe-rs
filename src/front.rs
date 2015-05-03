@@ -39,11 +39,19 @@ pub trait Schedule {
     /// tasks in-flight. The task will actually start as soon as all dependencies
     /// are finished.
     fn add_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle;
+
+    /// Create a new task that is a child of the parent task.
+    /// A child task will extend the lifespan of the parent
+    fn add_child_task(&self, t: Box<Task+Send>, signal: Option<Signal>);
 }
 
 impl Schedule for Frontend {
     fn add_task(&self, task: Box<Task+Send>, signal: Option<Signal>) -> Handle {
         Backend::start(self.backend.clone(), task, signal)
+    }
+
+    fn add_child_task(&self, _: Box<Task+Send>, _: Option<Signal>) {
+        panic!("Attempted to start a child task without a parent.")   
     }
 }
 
