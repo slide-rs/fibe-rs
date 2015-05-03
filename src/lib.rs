@@ -12,14 +12,16 @@ use pulse::Signal;
 
 mod back;
 mod front;
+mod task;
 
-pub use self::front::Frontend;
+pub use self::front::{Frontend, Schedule, ScheduleClosure};
+pub use self::task::{WaitState, Task, ResumableTask};
 
 /// Task handle, used for referencing a task in flight.
 pub type Handle = Signal;
 
-#[derive(PartialEq, Copy, Clone, Debug)]
 /// Wait mode for the front-end termination.
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum Wait {
     /// Wait for nothing - terminate immediately.
     None,
@@ -28,3 +30,4 @@ pub enum Wait {
     /// Wait for the whole queue to flush.
     Pending,
 }
+
