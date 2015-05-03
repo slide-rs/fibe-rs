@@ -60,36 +60,32 @@ impl Backend {
     /// been completed.
     pub fn start(back: Arc<Backend>, task: Box<Task+Send>, wait: Option<Signal>) -> Handle {
         let (signal, complete) = Signal::new();
-        let pulse = wait.unwrap_or_else(|| Signal::pulsed());
-
         let ack = Arc::new(DoneAck::new(complete));
-        pulse.callback(move || {
-            if back.try_active_inc() {
-                thread::spawn(move || {
-                    let mut back = (back, ack);
-                    task.run((&mut back) as &mut Schedule);
-                    back.0.active_dec();
-                });
-            }
-        });
-
-        signal
+        Backend::start_child(back, task, wait, signal, ack)
     }
 
     /// Start a task that will run once all the Handle's have
     /// been completed.
     pub fn start_child(back: Arc<Backend>, task: Box<Task+Send>,
-                       wait: Option<Signal>, ack: Arc<DoneAck>) {
+                       wait: Option<Signal>, signal: Signal, ack: Arc<DoneAck>) -> Handle {
         let pulse = wait.unwrap_or_else(|| Signal::pulsed());
+        let sig = signal.clone();
         pulse.callback(move || {
             if back.try_active_inc() {
                 thread::spawn(move || {
-                    let mut back = (back, ack);
-                    task.run((&mut back) as &mut Schedule);
-                    back.0.active_dec();
+                    let mut back = (back, sig, ack);
+                    task.run(&mut back);
+
+                    let (back, sig, ack) = back;
+                    // Drop this before active_dec so that any pending
+                    // tasks are started before we try and signal the backend
+                    // that workd is done
+                    drop((sig, ack));
+                    back.active_dec();
                 });
             }
         });
+        signal
     }
 
     /// Kill the backend, wait until the condition is satisfied.
@@ -125,23 +121,23 @@ impl Backend {
     }
 }
 
-impl Schedule for (Arc<Backend>, Arc<DoneAck>)  {
+impl Schedule for (Arc<Backend>, Signal, Arc<DoneAck>)  {
     fn add_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
         Backend::start(self.0.clone(), t, signal)
     }
 
-    fn add_child_task(&self, t: Box<Task+Send>, signal: Option<Signal>) {
-        Backend::start_child(self.0.clone(), t, signal, self.1.clone())
+    fn add_child_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
+        Backend::start_child(self.0.clone(), t, signal, self.1.clone(), self.2.clone())
     }
 }
 
-impl<'a> Schedule for &'a mut (Arc<Backend>, Arc<DoneAck>)  {
+impl<'a> Schedule for &'a mut (Arc<Backend>, Signal, Arc<DoneAck>)  {
     fn add_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
         Backend::start(self.0.clone(), t, signal)
     }
 
-    fn add_child_task(&self, t: Box<Task+Send>, signal: Option<Signal>) {
-        Backend::start_child(self.0.clone(), t, signal, self.1.clone())
+    fn add_child_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
+        Backend::start_child(self.0.clone(), t, signal, self.1.clone(), self.2.clone())
     }
 }
 
