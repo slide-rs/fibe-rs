@@ -54,23 +54,23 @@ pub trait ScheduleClosure {
     /// tasks in-flight. The task will actually start as soon as all dependencies
     /// are finished.
     fn add<F>(&self, task: F, signal: Option<Signal>) -> Handle
-        where F: FnOnce(&Schedule) + Send + 'static;
+        where F: FnOnce(&mut Schedule) + Send + 'static;
 }
 
 impl<T> ScheduleClosure for T where T: Schedule {
     fn add<F>(&self, task: F, signal: Option<Signal>) -> Handle
-        where F: FnOnce(&Schedule) + Send + 'static {
+        where F: FnOnce(&mut Schedule) + Send + 'static {
 
-        let task: Box<FnBox(&Schedule)+Send+'static> = Box::new(task);
+        let task: Box<FnBox(&mut Schedule)+Send+'static> = Box::new(task);
         self.add_task(Box::new(task), signal)
     }
 }
 
-impl<'a> ScheduleClosure for &'a Schedule {
+impl<'a> ScheduleClosure for &'a mut Schedule {
     fn add<F>(&self, task: F, signal: Option<Signal>) -> Handle
-        where F: FnOnce(&Schedule) + Send + 'static {
+        where F: FnOnce(&mut Schedule) + Send + 'static {
 
-        let task: Box<FnBox(&Schedule)+Send+'static> = Box::new(task);
+        let task: Box<FnBox(&mut Schedule)+Send+'static> = Box::new(task);
         self.add_task(Box::new(task), signal)
     } 
 }

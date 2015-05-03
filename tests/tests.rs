@@ -3,6 +3,7 @@ extern crate timebomb;
 
 use fibe::*;
 use timebomb::timeout_ms;
+use std::sync::mpsc::{Sender, channel};
 
 #[test]
 fn die_empty_none() {
@@ -108,5 +109,38 @@ fn spawn_child() {
             b.wait().unwrap();
         }, None);
         last.wait().unwrap();
+    }, 3000);
+}
+
+struct CountDown(u32, Sender<()>);
+
+impl Drop for CountDown {
+    fn drop(&mut self) {
+        println!("Drop CountDown({})", self.0);
+        self.1.send(()).unwrap();
+        assert!(self.0 == 0);
+    }
+}
+
+impl ResumableTask for CountDown {
+    fn resume(&mut self, sched: &mut Schedule) -> WaitState {
+        println!("{}", self.0);
+        if self.0 == 1 {
+            WaitState::Completed
+        } else {
+            self.0 -= 1;
+            WaitState::Pending(sched.add(move |_| {}, None))
+        }
+    }
+}
+
+#[test]
+fn resumeable_task() {
+    timeout_ms(|| {
+        let front = Frontend::new();
+        let (tx, rx) = channel();
+        let count = Box::new(CountDown(1000, tx));
+        front.add_task(count, None).wait().unwrap();
+        rx.try_recv().ok().expect("Task should have sent an ack");
     }, 3000);
 }

@@ -58,17 +58,17 @@ impl Backend {
 
     /// Start a task that will run once all the Handle's have
     /// been completed.
-    pub fn start(inner: Arc<Backend>, task: Box<Task+Send>, wait: Option<Signal>) -> Handle {
+    pub fn start(back: Arc<Backend>, task: Box<Task+Send>, wait: Option<Signal>) -> Handle {
         let (signal, complete) = Signal::new();
         let pulse = wait.unwrap_or_else(|| Signal::pulsed());
 
+        let ack = DoneAck::new(complete);
         pulse.callback(move || {
-            if inner.try_active_inc() {
+            if back.try_active_inc() {
                 thread::spawn(move || {
-                    let inner = inner;
-                    task.run(&inner);
-                    complete.pulse();
-                    inner.active_dec();
+                    let mut back = (back, Some(ack));
+                    task.run((&mut back) as &mut Schedule);
+                    back.0.active_dec();
                 });
             }
         });
@@ -109,8 +109,30 @@ impl Backend {
     }
 }
 
-impl Schedule for Arc<Backend> {
+impl Schedule for (Arc<Backend>, Option<DoneAck>)  {
     fn add_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
-        Backend::start(self.clone(), t, signal)
+        Backend::start(self.0.clone(), t, signal)
+    }
+}
+
+impl<'a> Schedule for &'a mut (Arc<Backend>, Option<DoneAck>)  {
+    fn add_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
+        Backend::start(self.0.clone(), t, signal)
+    }
+}
+
+/// This is a shareable object to allow multiple
+/// tasks to 
+pub struct DoneAck(Option<Pulse>);
+
+impl DoneAck {
+    fn new(pulse: Pulse) -> DoneAck {
+        DoneAck(Some(pulse))
+    }
+}
+
+impl Drop for DoneAck {
+    fn drop(&mut self) {
+        self.0.take().map(|x| x.pulse());
     }
 }
