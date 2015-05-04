@@ -14,8 +14,9 @@ mod back;
 mod front;
 mod task;
 
+pub use self::back::TaskBuilder;
 pub use self::front::{Frontend, Schedule};
-pub use self::task::{WaitState, task, Task, ResumableTask, TaskBuilder, IntoTask};
+pub use self::task::{WaitState, task, Task, ResumableTask, IntoTask};
 
 /// Task handle, used for referencing a task in flight.
 pub type Handle = Signal;

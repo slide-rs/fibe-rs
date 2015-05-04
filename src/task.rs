@@ -1,7 +1,7 @@
 
 use std::boxed::FnBox;
-use pulse::{Signal, Barrier, Signals};
-use Schedule;
+use pulse::Signal;
+use {Schedule, TaskBuilder};
 
 /// Wait mode for a task
 #[derive(Clone, Debug)]
@@ -31,8 +31,8 @@ pub trait Task {
 impl<T> Task for T where T: ResumableTask + Send + 'static {
     fn run(mut self: Box<Self>, sched: &mut Schedule) {
         match self.resume(sched) {
-            WaitState::Ready => { sched.add_child_task(self, None); },
-            WaitState::Pending(signal) => { sched.add_child_task(self, Some(signal)); },
+            WaitState::Ready => { self.extend().start(sched); },
+            WaitState::Pending(signal) => { self.extend().after(signal).start(sched); },
             WaitState::Completed => (),
         }
     }
@@ -41,60 +41,6 @@ impl<T> Task for T where T: ResumableTask + Send + 'static {
 impl Task for Box<FnBox(&mut Schedule) + Send + 'static> {
     fn run(self: Box<Self>, sched: &mut Schedule) {
         self.call_box((sched,))
-    }
-}
-
-/// A structure to help build a task
-pub struct TaskBuilder {
-    inner: Box<Task+Send>,
-    extend: bool,
-    wait: Vec<Signal>
-}
-
-impl TaskBuilder {
-    /// Create a new TaskBuilder around `t`
-    pub fn new<T>(t: T) -> TaskBuilder where T: IntoTask {
-        TaskBuilder {
-            inner: t.into_task(),
-            extend: false,
-            wait: Vec::new()
-        }
-    }
-
-    /// A task extend will extend the lifetime of the parent task
-    /// Externally to this task the Handle will not show as complete
-    /// until both the parent, and child are completed.
-    ///
-    /// A parent should not wait on the child task if it is extended
-    /// the parent's lifetime. As this will deadlock.
-    pub fn extend(mut self) -> TaskBuilder {
-        self.extend = true;
-        self
-    }
-
-    /// Start the task only after `signal` is asserted
-    pub fn after(mut self, signal: Signal) -> TaskBuilder {
-        self.wait.push(signal);
-        self
-    }
-
-    /// Start the task using the supplied scheduler
-    pub fn start(self, sched: &mut Schedule) -> Signal {
-        let TaskBuilder{inner, extend, mut wait} = self;
-
-        let signal = if wait.len() == 0 {
-            None
-        } else if wait.len() == 1 {
-            Some(wait.pop().unwrap())
-        } else {
-            Some(Barrier::new(&wait).signal())
-        };
-
-        if extend {
-            sched.add_child_task(inner, signal)
-        } else {
-            sched.add_task(inner, signal)
-        }
     }
 }
 
