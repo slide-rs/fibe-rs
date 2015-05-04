@@ -53,18 +53,12 @@ pub struct TaskBuilder {
 
 impl TaskBuilder {
     /// Create a new TaskBuilder around `t`
-    pub fn new<T>(t: T) -> TaskBuilder where T: Task+Send+'static {
+    pub fn new<T>(t: T) -> TaskBuilder where T: IntoTask {
         TaskBuilder {
-            inner: Box::new(t),
+            inner: t.into_task(),
             extend: false,
             wait: Vec::new()
         }
-    }
-
-    /// Create a new TaskBuilder around the supplied function
-    pub fn func<F>(f: F) -> TaskBuilder where F: FnOnce(&mut Schedule)+Send+'static {
-        let f: Box<FnBox(&mut Schedule)+Send+'static> = Box::new(f);
-        TaskBuilder::new(f)
     }
 
     /// A task extend will extend the lifetime of the parent task
@@ -108,4 +102,44 @@ impl TaskBuilder {
 pub trait RunnableTask {
     /// Run the task consuming it
     fn run(self: Box<Self>, sched: &mut Schedule);
+}
+
+/// Convert a foo into a task
+pub trait IntoTask: Sized {
+    /// Convert yourself into a boxed task
+    fn into_task(self) -> Box<Task+Send>;
+
+    /// equivalent of `TaskBuilder::new(self).extend(sched)`
+    fn extend(self) -> TaskBuilder {
+        TaskBuilder::new(self).extend()
+    }
+
+    /// equivalent of `TaskBuilder::new(self).after(sched)`
+    fn after(self, signal: Signal) -> TaskBuilder {
+        TaskBuilder::new(self).after(signal)
+    }
+
+    /// equivalent of `TaskBuilder::new(self).start(sched)`
+    fn start(self, sched: &mut Schedule) -> Signal {
+        TaskBuilder::new(self).start(sched)
+    }
+}
+
+impl IntoTask for Box<FnBox(&mut Schedule)+Send+'static> {
+    fn into_task(self) -> Box<Task+Send> {
+        Box::new(self)
+    }
+}
+
+impl<T> IntoTask for T where T: ResumableTask+Send+'static {
+    fn into_task(self) -> Box<Task+Send> {
+        Box::new(self)
+    }
+}
+
+/// This is a helper function to build a Boxed closure that can be run a task
+/// Returns a task builder
+pub fn task<F>(f: F) -> TaskBuilder where F: FnOnce(&mut Schedule)+Send+'static {
+    let f: Box<FnBox(&mut Schedule)+Send+'static> = Box::new(f);
+    TaskBuilder::new(f)
 }

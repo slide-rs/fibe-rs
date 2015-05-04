@@ -34,7 +34,7 @@ fn die_all_active_none() {
     timeout_ms(|| {
         let mut front = Frontend::new();
         for _ in 0..10 {
-            TaskBuilder::func(move |_| {}).start(&mut front);
+            task(move |_| {}).start(&mut front);
         }
         front.die(fibe::Wait::None);
     }, 3000);
@@ -45,7 +45,7 @@ fn die_all_active_pending() {
     timeout_ms(|| {
         let mut front = Frontend::new();
         for _ in 0..10 {
-            TaskBuilder::func(move |_| {}).start(&mut front);
+            task(move |_| {}).start(&mut front);
         }
         front.die(fibe::Wait::Pending);
     }, 3000);
@@ -56,7 +56,7 @@ fn die_all_active_active() {
     timeout_ms(|| {
         let mut front = Frontend::new();
         for _ in 0..10 {
-            TaskBuilder::func(move |_| {}).start(&mut front);
+            task(move |_| {}).start(&mut front);
         }
         front.die(fibe::Wait::Active);
     }, 3000);
@@ -66,9 +66,9 @@ fn die_all_active_active() {
 fn die_pending_chain_none() {
     timeout_ms(|| {
         let mut front = Frontend::new();
-        let mut last = TaskBuilder::func(move |_| {}).start(&mut front);
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
-            last = TaskBuilder::func(move |_| {})
+            last = task(move |_| {})
                                .after(last)
                                .start(&mut front);
         }
@@ -80,11 +80,9 @@ fn die_pending_chain_none() {
 fn die_pending_chain_pending() {
     timeout_ms(|| {
         let mut front = Frontend::new();
-        let mut last = TaskBuilder::func(move |_| {}).start(&mut front);
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
-            last = TaskBuilder::func(move |_| {})
-                               .after(last)
-                               .start(&mut front);
+            last = task(move |_| {}).after(last).start(&mut front);
         }
         front.die(fibe::Wait::Pending);
     }, 3000);
@@ -94,9 +92,9 @@ fn die_pending_chain_pending() {
 fn die_pending_chain_active() {
     timeout_ms(|| {
         let mut front = Frontend::new();
-        let mut last = TaskBuilder::func(move |_| {}).start(&mut front);
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
-            last = TaskBuilder::func(move |_| {})
+            last = task(move |_| {})
                                .after(last)
                                .start(&mut front);
         }
@@ -108,9 +106,9 @@ fn die_pending_chain_active() {
 fn spawn_child() {
     timeout_ms(|| {
         let mut front = Frontend::new();
-        let last = TaskBuilder::func(move |s| {
-            let a = TaskBuilder::func(move |_| {}).start(s);
-            let b = TaskBuilder::func(move |_| {}).start(s);
+        let last = task(move |s| {
+            let a = task(move |_| {}).start(s);
+            let b = task(move |_| {}).start(s);
             a.wait().unwrap();
             b.wait().unwrap();
         }).start(&mut front);
@@ -134,7 +132,7 @@ impl ResumableTask for CountDown {
         } else {
             self.0 -= 1;
             WaitState::Pending(
-                TaskBuilder::func(move |_| {}).start(sched)
+                task(move |_| {}).start(sched)
             )
         }
     }
@@ -146,7 +144,7 @@ fn resumeable_task() {
         let mut front = Frontend::new();
         let (tx, rx) = channel();
         let count = CountDown(1000, tx);
-        TaskBuilder::new(count).start(&mut front).wait().unwrap();
+        count.start(&mut front).wait().unwrap();
         rx.try_recv().ok().expect("Task should have sent an ack");
     }, 3000);
 }

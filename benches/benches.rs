@@ -19,11 +19,9 @@ fn start_die(b: &mut Bencher) {
 fn chain_10_use_die(b: &mut Bencher) {
     b.iter(|| {
         let mut front = fibe::Frontend::new();
-        let mut last = TaskBuilder::func(move |_| {}).start(&mut front);
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
-            last = TaskBuilder::func(move |_| {})
-                               .after(last)
-                               .start(&mut front);
+            last = task(move |_| {}).after(last).start(&mut front);
         }
         front.die(fibe::Wait::Pending);
     });
@@ -33,11 +31,9 @@ fn chain_10_use_die(b: &mut Bencher) {
 fn chain_10_wait(b: &mut Bencher) {
     let mut front = fibe::Frontend::new();
     b.iter(|| {
-        let mut last = TaskBuilder::func(move |_| {}).start(&mut front);
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
-            last = TaskBuilder::func(move |_| {})
-                               .after(last)
-                               .start(&mut front);
+            last = task(move |_| {}).after(last).start(&mut front);
         }
         last.wait().unwrap();
     });
@@ -47,11 +43,9 @@ fn chain_10_wait(b: &mut Bencher) {
 fn chain_1_000_use_die(b: &mut Bencher) {
     b.iter(|| {
         let mut front = fibe::Frontend::new();
-        let mut last = TaskBuilder::func(move |_| {}).start(&mut front);
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..1_000 {
-            last = TaskBuilder::func(move |_| {})
-                               .after(last)
-                               .start(&mut front);
+            last = task(move |_| {}).after(last).start(&mut front);
         }
         front.die(fibe::Wait::Pending);
     });
@@ -61,18 +55,16 @@ fn chain_1_000_use_die(b: &mut Bencher) {
 fn chain_1_000_wait(b: &mut Bencher) {
     let mut front = fibe::Frontend::new();
     b.iter(|| {
-        let mut last = TaskBuilder::func(move |_| {}).start(&mut front);
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..1_000 {
-            last = TaskBuilder::func(move |_| {})
-                               .after(last)
-                               .start(&mut front);
+            last = task(move |_| {}).after(last).start(&mut front);
         }
         last.wait().unwrap();
     });
 }
 
 fn fibb(depth: usize, front: &mut fibe::Frontend) -> fibe::Handle {
-    let task = TaskBuilder::func(move |_| {});
+    let task = task(move |_| {});
     if depth == 0 {
         task
     } else {
