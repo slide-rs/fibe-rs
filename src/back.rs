@@ -4,7 +4,9 @@
 
 use std::thread;
 use std::sync::atomic::*;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{SyncSender, Sender, Receiver, sync_channel, channel};
+use std::boxed::FnBox;
 use atom::*;
 use pulse::*;
 
@@ -14,18 +16,29 @@ use {Handle, Wait, Task, Schedule, IntoTask};
 const BLOCK: usize = 0x8000_0000;
 const REF_COUNT: usize = 0x7FFF_FFFF;
 
+// Todo, user define...
+const MAX_IDLE: usize = 32;
+
 /// Task queue back-end.
 pub struct Backend {
     active: AtomicUsize,
     work_done: Atom<Pulse>,
+
+    // Idle queue of threads
+    threads: Mutex<Receiver<Sender<Box<FnBox()+Send>>>>,
+    queue: Mutex<SyncSender<Sender<Box<FnBox()+Send>>>>
 }
 
 impl Backend {
     /// Create a new back-end.
     pub fn new() -> Backend {
+        let (tx, rx) = sync_channel(MAX_IDLE);
+
         Backend {
             active: AtomicUsize::new(0),
-            work_done: Atom::empty()
+            work_done: Atom::empty(),
+            threads: Mutex::new(rx),
+            queue: Mutex::new(tx)
         }
     }
 
@@ -40,7 +53,7 @@ impl Backend {
 
             // This is used instead of a fetch_add to allow for checking of the
             // block flag
-            if value == self.active.compare_and_swap(value, value + 1, Ordering::SeqCst) {
+            if value == self.active.compare_and_swap(value, value+1, Ordering::SeqCst) {
                 return true;
             }
         }
@@ -54,6 +67,42 @@ impl Backend {
         if count & REF_COUNT == 1 {
             self.work_done.take().map(|p| p.pulse());
         }
+    }
+
+    /// Creates a thread iff needed
+    fn thread(&self) -> Sender<Box<FnBox()+Send>> {
+        let guard = self.threads.lock().unwrap();
+        if let Ok(thread) = guard.try_recv() {
+            return thread;
+        }
+
+        drop(guard);
+        let idle_msg = self.queue.lock().unwrap().clone();
+
+        let (tx, rx): (Sender<Box<FnBox()+Send>>, Receiver<Box<FnBox()+Send>>) = channel();
+        thread::spawn(move || {
+            // run the first task
+            if let Ok(work) = rx.recv() {
+                work();
+            } else {
+                return;
+            }
+
+            // run any new messages
+            loop {
+                let (tx, rx) = channel();
+                if let Err(_) = idle_msg.try_send(tx) {
+                    return;
+                }
+
+                if let Ok(work) = rx.recv() {
+                    work();
+                } else {
+                    return;
+                }
+            }
+        });
+        tx
     }
 
     /// Start a task that will run once all the Handle's have
@@ -76,12 +125,13 @@ impl Backend {
             task.wait.pop().unwrap()
         } else {
             Barrier::new(&task.wait).signal()
-        };        
+        };
 
         let sig = done_signal.clone();
         signal.callback(move || {
             if back.try_active_inc() {
-                thread::spawn(move || {
+                let thread = back.thread();
+                thread.send(Box::new(move || {
                     let mut back = (back, sig, ack);
                     task.inner.run(&mut back);
 
@@ -91,7 +141,7 @@ impl Backend {
                     // that work is done
                     drop((sig, ack));
                     back.active_dec();
-                });
+                })).unwrap();
             }
         });
 
