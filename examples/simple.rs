@@ -3,10 +3,9 @@ extern crate fibe;
 use fibe::*;
 
 fn test(wait: Wait) {
-    let front = Frontend::new();
-    let ha = front.add(move |_| {print!("Hello, ")}, None);
-    let hb = front.add(move |_| {println!("world")}, Some(ha));
-    let _ = hb;
+    let mut front = Frontend::new();
+    let ha = task(move |_| {print!("Hello, ")}).start(&mut front);
+    task(move |_| {println!("World!")}).after(ha).start(&mut front);
     front.die(wait);
 }
 

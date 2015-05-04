@@ -5,7 +5,6 @@ extern crate test;
 extern crate pulse;
 
 use fibe::*;
-use pulse::{Barrier, Signals};
 use test::Bencher;
 
 #[bench]
@@ -19,10 +18,10 @@ fn start_die(b: &mut Bencher) {
 #[bench]
 fn chain_10_use_die(b: &mut Bencher) {
     b.iter(|| {
-        let front = fibe::Frontend::new();
-        let mut last = front.add(move |_| {}, None);
+        let mut front = fibe::Frontend::new();
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
-            last = front.add(move |_| {}, Some(last));
+            last = task(move |_| {}).after(last).start(&mut front);
         }
         front.die(fibe::Wait::Pending);
     });
@@ -30,11 +29,11 @@ fn chain_10_use_die(b: &mut Bencher) {
 
 #[bench]
 fn chain_10_wait(b: &mut Bencher) {
-    let front = fibe::Frontend::new();
+    let mut front = fibe::Frontend::new();
     b.iter(|| {
-        let mut last = front.add(move |_| {}, None);
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
-            last = front.add(move |_| {}, Some(last));
+            last = task(move |_| {}).after(last).start(&mut front);
         }
         last.wait().unwrap();
     });
@@ -43,10 +42,10 @@ fn chain_10_wait(b: &mut Bencher) {
 #[bench]
 fn chain_1_000_use_die(b: &mut Bencher) {
     b.iter(|| {
-        let front = fibe::Frontend::new();
-        let mut last = front.add(move |_| {}, None);
+        let mut front = fibe::Frontend::new();
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..1_000 {
-            last = front.add(move |_| {}, Some(last));
+            last = task(move |_| {}).after(last).start(&mut front);
         }
         front.die(fibe::Wait::Pending);
     });
@@ -54,31 +53,32 @@ fn chain_1_000_use_die(b: &mut Bencher) {
 
 #[bench]
 fn chain_1_000_wait(b: &mut Bencher) {
-    let front = fibe::Frontend::new();
+    let mut front = fibe::Frontend::new();
     b.iter(|| {
-        let mut last = front.add(move |_| {}, None);
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..1_000 {
-            last = front.add(move |_| {}, Some(last));
+            last = task(move |_| {}).after(last).start(&mut front);
         }
         last.wait().unwrap();
     });
 }
 
-fn fibb(depth: usize, front: &fibe::Frontend) -> fibe::Handle {
+fn fibb(depth: usize, front: &mut fibe::Frontend) -> fibe::Handle {
+    let task = task(move |_| {});
     if depth == 0 {
-        front.add(move |_| {}, None)
+        task
     } else {
         let left = fibb(depth - 1, front);
         let right = fibb(depth - 1, front);
-        front.add(move |_| {}, Some(Barrier::new(&[left, right]).signal()))
-    }
+        task.after(left).after(right)
+    }.start(front)
 }
 
 #[bench]
 fn fibb_depth_6(b: &mut Bencher) {
     b.iter(|| {
-        let front = fibe::Frontend::new();
-        fibb(6, &front);
+        let mut front = fibe::Frontend::new();
+        fibb(6, &mut front);
         front.die(fibe::Wait::Pending);
     });
 }

@@ -32,9 +32,9 @@ fn die_empty_active() {
 #[test]
 fn die_all_active_none() {
     timeout_ms(|| {
-        let front = Frontend::new();
+        let mut front = Frontend::new();
         for _ in 0..10 {
-            front.add(move |_| {}, None);
+            task(move |_| {}).start(&mut front);
         }
         front.die(fibe::Wait::None);
     }, 3000);
@@ -43,9 +43,9 @@ fn die_all_active_none() {
 #[test]
 fn die_all_active_pending() {
     timeout_ms(|| {
-        let front = Frontend::new();
+        let mut front = Frontend::new();
         for _ in 0..10 {
-            front.add(move |_| {}, None);
+            task(move |_| {}).start(&mut front);
         }
         front.die(fibe::Wait::Pending);
     }, 3000);
@@ -54,9 +54,9 @@ fn die_all_active_pending() {
 #[test]
 fn die_all_active_active() {
     timeout_ms(|| {
-        let front = Frontend::new();
+        let mut front = Frontend::new();
         for _ in 0..10 {
-            front.add(move |_| {}, None);
+            task(move |_| {}).start(&mut front);
         }
         front.die(fibe::Wait::Active);
     }, 3000);
@@ -65,10 +65,12 @@ fn die_all_active_active() {
 #[test]
 fn die_pending_chain_none() {
     timeout_ms(|| {
-        let front = Frontend::new();
-        let mut last = front.add(move |_| {}, None);
+        let mut front = Frontend::new();
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
-            last = front.add(move |_| {}, Some(last));
+            last = task(move |_| {})
+                               .after(last)
+                               .start(&mut front);
         }
         front.die(fibe::Wait::None);
     }, 3000);
@@ -77,10 +79,10 @@ fn die_pending_chain_none() {
 #[test]
 fn die_pending_chain_pending() {
     timeout_ms(|| {
-        let front = Frontend::new();
-        let mut last = front.add(move |_| {}, None);
+        let mut front = Frontend::new();
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
-            last = front.add(move |_| {}, Some(last));
+            last = task(move |_| {}).after(last).start(&mut front);
         }
         front.die(fibe::Wait::Pending);
     }, 3000);
@@ -89,10 +91,12 @@ fn die_pending_chain_pending() {
 #[test]
 fn die_pending_chain_active() {
     timeout_ms(|| {
-        let front = Frontend::new();
-        let mut last = front.add(move |_| {}, None);
+        let mut front = Frontend::new();
+        let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
-            last = front.add(move |_| {}, Some(last));
+            last = task(move |_| {})
+                               .after(last)
+                               .start(&mut front);
         }
         front.die(fibe::Wait::Active);
     }, 3000);
@@ -101,13 +105,13 @@ fn die_pending_chain_active() {
 #[test]
 fn spawn_child() {
     timeout_ms(|| {
-        let front = Frontend::new();
-        let last = front.add(move |s| {
-            let a = s.add(move |_| {}, None);
-            let b = s.add(move |_| {}, None);
+        let mut front = Frontend::new();
+        let last = task(move |s| {
+            let a = task(move |_| {}).start(s);
+            let b = task(move |_| {}).start(s);
             a.wait().unwrap();
             b.wait().unwrap();
-        }, None);
+        }).start(&mut front);
         last.wait().unwrap();
     }, 3000);
 }
@@ -127,7 +131,9 @@ impl ResumableTask for CountDown {
             WaitState::Completed
         } else {
             self.0 -= 1;
-            WaitState::Pending(sched.add(move |_| {}, None))
+            WaitState::Pending(
+                task(move |_| {}).start(sched)
+            )
         }
     }
 }
@@ -135,10 +141,10 @@ impl ResumableTask for CountDown {
 #[test]
 fn resumeable_task() {
     timeout_ms(|| {
-        let front = Frontend::new();
+        let mut front = Frontend::new();
         let (tx, rx) = channel();
-        let count = Box::new(CountDown(1000, tx));
-        front.add_task(count, None).wait().unwrap();
+        let count = CountDown(1000, tx);
+        count.start(&mut front).wait().unwrap();
         rx.try_recv().ok().expect("Task should have sent an ack");
     }, 3000);
 }
