@@ -8,7 +8,7 @@ use std::sync::Arc;
 use atom::*;
 use pulse::*;
 
-use {Handle, Wait, Task, Schedule};
+use {Handle, Wait, Task, Schedule, IntoTask};
 
 // Todo 64bit verison
 const BLOCK: usize = 0x8000_0000;
@@ -17,7 +17,7 @@ const REF_COUNT: usize = 0x7FFF_FFFF;
 /// Task queue back-end.
 pub struct Backend {
     active: AtomicUsize,
-    work_done: Atom<Pulse>
+    work_done: Atom<Pulse>,
 }
 
 impl Backend {
@@ -58,34 +58,44 @@ impl Backend {
 
     /// Start a task that will run once all the Handle's have
     /// been completed.
-    pub fn start(back: Arc<Backend>, task: Box<Task+Send>, wait: Option<Signal>) -> Handle {
-        let (signal, complete) = Signal::new();
-        let ack = Arc::new(DoneAck::new(complete));
-        Backend::start_child(back, task, wait, signal, ack)
-    }
+    pub fn start(back: Arc<Backend>, mut task: TaskBuilder,
+                 ack: Option<(Signal, Arc<DoneAck>)>) -> Handle {
 
-    /// Start a task that will run once all the Handle's have
-    /// been completed.
-    pub fn start_child(back: Arc<Backend>, task: Box<Task+Send>,
-                       wait: Option<Signal>, signal: Signal, ack: Arc<DoneAck>) -> Handle {
-        let pulse = wait.unwrap_or_else(|| Signal::pulsed());
-        let sig = signal.clone();
-        pulse.callback(move || {
+        // Create or reuse the DoneAck
+        let (done_signal, ack) = if task.extend {
+            ack.expect("No parent thread to extend")
+        } else {
+            let (signal, complete) = Signal::new();
+            (signal, Arc::new(DoneAck::new(complete)))
+        };
+
+        // Create the wait signal if needed
+        let signal = if task.wait.len() == 0 {
+            Signal::pulsed()
+        } else if task.wait.len() == 1 {
+            task.wait.pop().unwrap()
+        } else {
+            Barrier::new(&task.wait).signal()
+        };        
+
+        let sig = done_signal.clone();
+        signal.callback(move || {
             if back.try_active_inc() {
                 thread::spawn(move || {
                     let mut back = (back, sig, ack);
-                    task.run(&mut back);
+                    task.inner.run(&mut back);
 
                     let (back, sig, ack) = back;
                     // Drop this before active_dec so that any pending
                     // tasks are started before we try and signal the backend
-                    // that workd is done
+                    // that work is done
                     drop((sig, ack));
                     back.active_dec();
                 });
             }
         });
-        signal
+
+        done_signal
     }
 
     /// Kill the backend, wait until the condition is satisfied.
@@ -122,22 +132,14 @@ impl Backend {
 }
 
 impl Schedule for (Arc<Backend>, Signal, Arc<DoneAck>)  {
-    fn add_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
-        Backend::start(self.0.clone(), t, signal)
-    }
-
-    fn add_child_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
-        Backend::start_child(self.0.clone(), t, signal, self.1.clone(), self.2.clone())
+    fn add_task(&self, task: TaskBuilder) -> Handle {
+        Backend::start(self.0.clone(), task, Some((self.1.clone(), self.2.clone())))
     }
 }
 
 impl<'a> Schedule for &'a mut (Arc<Backend>, Signal, Arc<DoneAck>)  {
-    fn add_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
-        Backend::start(self.0.clone(), t, signal)
-    }
-
-    fn add_child_task(&self, t: Box<Task+Send>, signal: Option<Signal>) -> Handle {
-        Backend::start_child(self.0.clone(), t, signal, self.1.clone(), self.2.clone())
+    fn add_task(&self, task: TaskBuilder) -> Handle {
+        Backend::start(self.0.clone(), task, Some((self.1.clone(), self.2.clone())))
     }
 }
 
@@ -154,5 +156,48 @@ impl DoneAck {
 impl Drop for DoneAck {
     fn drop(&mut self) {
         self.0.take().map(|x| x.pulse());
+    }
+}
+
+/// A structure to help build a task
+pub struct TaskBuilder {
+    /// The task to be run
+    inner: Box<Task+Send>,
+    /// is the task extended or not
+    extend: bool,
+    /// The signals to wait on
+    wait: Vec<Signal>
+}
+
+impl TaskBuilder {
+    /// Create a new TaskBuilder around `t`
+    pub fn new<T>(t: T) -> TaskBuilder where T: IntoTask {
+        TaskBuilder {
+            inner: t.into_task(),
+            extend: false,
+            wait: Vec::new()
+        }
+    }
+
+    /// A task extend will extend the lifetime of the parent task
+    /// Externally to this task the Handle will not show as complete
+    /// until both the parent, and child are completed.
+    ///
+    /// A parent should not wait on the child task if it is extended
+    /// the parent's lifetime. As this will deadlock.
+    pub fn extend(mut self) -> TaskBuilder {
+        self.extend = true;
+        self
+    }
+
+    /// Start the task only after `signal` is asserted
+    pub fn after(mut self, signal: Signal) -> TaskBuilder {
+        self.wait.push(signal);
+        self
+    }
+
+    /// Start the task using the supplied scheduler
+    pub fn start(self, sched: &mut Schedule) -> Signal {
+        sched.add_task(self)
     }
 }
