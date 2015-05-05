@@ -7,12 +7,15 @@ use std::sync::atomic::*;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{SyncSender, Sender, Receiver, sync_channel, channel};
 use std::boxed::FnBox;
+use std::collections::HashMap;
 use atom::*;
 use pulse::*;
+use deque;
 
 use {Handle, Wait, Task, Schedule, IntoTask};
+use worker;
 
-// Todo 64bit verison
+// Todo 64bit version
 const BLOCK: usize = 0x8000_0000;
 const REF_COUNT: usize = 0x7FFF_FFFF;
 
@@ -24,22 +27,32 @@ pub struct Backend {
     active: AtomicUsize,
     work_done: Atom<Pulse>,
 
-    // Idle queue of threads
-    threads: Mutex<Receiver<Sender<Box<FnBox()+Send>>>>,
-    queue: Mutex<SyncSender<Sender<Box<FnBox()+Send>>>>
+    index: AtomicUsize,
+    pub global_queue: Mutex<deque::Worker<Box<FnBox()+Send>>>,
+    stealers: Mutex<HashMap<usize, deque::Stealer<Box<FnBox()+Send>>>>,
 }
 
 impl Backend {
     /// Create a new back-end.
-    pub fn new() -> Backend {
-        let (tx, rx) = sync_channel(MAX_IDLE);
+    pub fn new() -> Arc<Backend> {
+        let buffer = deque::BufferPool::new();
+        let (worker, stealer) = buffer.deque();
 
-        Backend {
+        let mut map = HashMap::new();
+        map.insert(0, stealer);
+
+        let back = Arc::new(Backend {
             active: AtomicUsize::new(0),
             work_done: Atom::empty(),
-            threads: Mutex::new(rx),
-            queue: Mutex::new(tx)
+            index: AtomicUsize::new(1),
+            global_queue: Mutex::new(worker),
+            stealers: Mutex::new(map),
+        });
+
+        for _ in 0..2 {
+            worker::Worker::new(back.clone()).start();
         }
+        back
     }
 
     /// Check to see if the scheduler has put a hold on the
@@ -69,41 +82,6 @@ impl Backend {
         }
     }
 
-    /// Creates a thread iff needed
-    fn thread(&self) -> Sender<Box<FnBox()+Send>> {
-        let guard = self.threads.lock().unwrap();
-        if let Ok(thread) = guard.try_recv() {
-            return thread;
-        }
-
-        drop(guard);
-        let idle_msg = self.queue.lock().unwrap().clone();
-
-        let (tx, rx): (Sender<Box<FnBox()+Send>>, Receiver<Box<FnBox()+Send>>) = channel();
-        thread::spawn(move || {
-            // run the first task
-            if let Ok(work) = rx.recv() {
-                work();
-            } else {
-                return;
-            }
-
-            // run any new messages
-            loop {
-                let (tx, rx) = channel();
-                if let Err(_) = idle_msg.try_send(tx) {
-                    return;
-                }
-
-                if let Ok(work) = rx.recv() {
-                    work();
-                } else {
-                    return;
-                }
-            }
-        });
-        tx
-    }
 
     /// Start a task that will run once all the Handle's have
     /// been completed.
@@ -130,8 +108,7 @@ impl Backend {
         let sig = done_signal.clone();
         signal.callback(move || {
             if back.try_active_inc() {
-                let thread = back.thread();
-                thread.send(Box::new(move || {
+                worker::start(&back.clone(), Box::new(move || {
                     let mut back = (back, sig, ack);
                     task.inner.run(&mut back);
 
@@ -141,7 +118,7 @@ impl Backend {
                     // that work is done
                     drop((sig, ack));
                     back.active_dec();
-                })).unwrap();
+                }));
             }
         });
 
@@ -178,6 +155,21 @@ impl Backend {
         } else {
             signal.wait().unwrap();
         }
+    }
+
+    /// Create a new deque
+    pub fn new_deque(&self) -> (usize, deque::Worker<Box<FnBox()+Send>>) {
+        let index = self.index.fetch_add(1, Ordering::SeqCst);
+        let buffer = deque::BufferPool::new();
+        let (worker, stealer) = buffer.deque();
+        let mut guard = self.stealers.lock().unwrap();
+        guard.insert(index, stealer);
+        (index, worker)
+    }
+
+    pub fn stealers(&self) -> Vec<deque::Stealer<Box<FnBox()+Send>>> {
+        let guard = self.stealers.lock().unwrap();
+        guard.values().map(|x| x.clone()).collect()
     }
 }
 

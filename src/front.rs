@@ -15,7 +15,7 @@ impl Frontend {
     /// Create a new front-end with an associated
     /// back-end automatically.
     pub fn new() -> Frontend {
-        let backend = Arc::new(Backend::new());
+        let backend = Backend::new();
         let back = backend.clone();
         let front = Frontend {
             backend: back,

@@ -11,6 +11,8 @@ name = "fibe"
 [dependencies]
 log = "*"
 atom = "*"
+deque = "*"
+rand = "*"
 
 [dependencies.pulse]
 git = "https://github.com/csherratt/pulse.git"

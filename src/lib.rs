@@ -7,12 +7,15 @@
 extern crate log;
 extern crate pulse;
 extern crate atom;
+extern crate deque;
+extern crate rand;
 
 use pulse::Signal;
 
 mod back;
 mod front;
 mod task;
+mod worker;
 
 pub use self::back::TaskBuilder;
 pub use self::front::{Frontend, Schedule};
