@@ -22,14 +22,19 @@ const REF_COUNT: usize = 0x7FFF_FFFF;
 // Todo, user define...
 const MAX_IDLE: usize = 32;
 
+struct Inner {
+    index: usize,
+    stealers: HashMap<usize, deque::Stealer<Box<FnBox()+Send>>>,
+    workers: HashMap<usize, Sender<worker::Command>>
+}
+
 /// Task queue back-end.
 pub struct Backend {
     active: AtomicUsize,
     work_done: Atom<Pulse>,
 
-    index: AtomicUsize,
     pub global_queue: Mutex<deque::Worker<Box<FnBox()+Send>>>,
-    stealers: Mutex<HashMap<usize, deque::Stealer<Box<FnBox()+Send>>>>,
+    workers: Mutex<Inner>,
 }
 
 impl Backend {
@@ -44,9 +49,12 @@ impl Backend {
         let back = Arc::new(Backend {
             active: AtomicUsize::new(0),
             work_done: Atom::empty(),
-            index: AtomicUsize::new(1),
             global_queue: Mutex::new(worker),
-            stealers: Mutex::new(map),
+            workers: Mutex::new(Inner {
+                index: 0,
+                stealers: map,
+                workers: HashMap::new()
+            }),
         });
 
         for _ in 0..2 {
@@ -150,26 +158,33 @@ impl Backend {
         };
 
         // Wait until the count is equal to 0.
-        if count & REF_COUNT == 0 {
-            return;
-        } else {
+        if count & REF_COUNT != 0 {
             signal.wait().unwrap();
+        }
+
+        let guard = self.workers.lock().unwrap();
+        for (_, send) in guard.workers.iter() {
+            send.send(worker::Command::Exit);
         }
     }
 
     /// Create a new deque
-    pub fn new_deque(&self) -> (usize, deque::Worker<Box<FnBox()+Send>>) {
-        let index = self.index.fetch_add(1, Ordering::SeqCst);
+    pub fn new_deque(&self) -> (usize,
+                                deque::Worker<Box<FnBox()+Send>>,
+                                Receiver<worker::Command>) {
+
         let buffer = deque::BufferPool::new();
         let (worker, stealer) = buffer.deque();
-        let mut guard = self.stealers.lock().unwrap();
-        guard.insert(index, stealer);
-        (index, worker)
-    }
-
-    pub fn stealers(&self) -> Vec<deque::Stealer<Box<FnBox()+Send>>> {
-        let guard = self.stealers.lock().unwrap();
-        guard.values().map(|x| x.clone()).collect()
+        let (send, recv) = channel();
+        let mut guard = self.workers.lock().unwrap();
+        let index = guard.index;
+        guard.index += 1;
+        for (&key, stealer) in guard.stealers.iter() {
+            send.send(worker::Command::Add(key, stealer.clone()));
+        }
+        guard.stealers.insert(index, stealer);
+        guard.workers.insert(index, send);
+        (index, worker, recv)
     }
 }
 

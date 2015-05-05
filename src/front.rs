@@ -30,6 +30,12 @@ impl Frontend {
     }
 }
 
+impl Drop for Frontend {
+    fn drop(&mut self) {
+        self.backend.exit(Wait::None)
+    }
+}
+
 /// Abstract representation of a the scheduler, allow for new tasks
 /// to be created and enqueued.
 pub trait Schedule {

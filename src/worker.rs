@@ -3,10 +3,17 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::boxed::FnBox;
 use std::thread;
+use std::sync::mpsc::Receiver;
 use std::collections::HashMap;
 use rand::{self, Rng};
 use deque::{self, Stolen};
 use back::{TaskBuilder, Backend};
+
+pub enum Command {
+    Add(usize, deque::Stealer<Box<FnBox()+Send>>),
+    Remove(usize),
+    Exit
+}
 
 thread_local!(static WORKER: RefCell<Option<Worker>> = RefCell::new(None));
 
@@ -14,21 +21,24 @@ pub struct Worker {
     index: usize,
     back: Arc<Backend>,
     queue: deque::Worker<Box<FnBox()+Send>>,
+    command: Option<Receiver<Command>>
 }
 
 impl Worker {
     pub fn new(back: Arc<Backend>) -> Worker {
-        let (index, worker) = back.new_deque();
+        let (index, worker, rx) = back.new_deque();
 
         Worker {
             index: index,
             back: back,
             queue: worker,
+            command: Some(rx)
         }
     }
 
     pub fn start(self) {
-        thread::spawn(move || {
+        let name = format!("Worker {}", self.index);
+        thread::Builder::new().name(name).spawn(move || {
             WORKER.with(|worker| {
                 *worker.borrow_mut() = Some(self);
             });
@@ -38,32 +48,42 @@ impl Worker {
 }
 
 fn work() {
-    let mut rand = rand::thread_rng();;
     WORKER.with(|worker| {
-        let mut stealers = worker.borrow().as_ref().unwrap().back.stealers();
+        let cmd = worker.borrow_mut().as_mut().unwrap().command.take().unwrap();
+        let mut rand = rand::thread_rng();
+        let mut stealers: Vec<(usize, deque::Stealer<Box<FnBox()+Send>>)> = Vec::new();
+
         loop {
             if let Some(task) = worker.borrow().as_ref().unwrap().queue.pop() {
                 task();
                 continue;
             }
 
-            for i in 0..256 {
-                let x: usize = rand.gen();
-                let x = x % stealers.len();
-                if let Stolen::Data(task) = stealers[x].steal() {
-                    task();
-                    break;
-                } else {
-                    if i > 256 - 10 {
-                        thread::sleep_ms(1);
+            if stealers.len() > 0 {
+                for i in 0..100 {
+                    let x: usize = rand.gen();
+                    let x = x % stealers.len();
+                    if let Stolen::Data(task) = stealers[x].1.steal() {
+                        task();
+                        break;
                     }
                 }
             }
 
-            {
-                let mut worker = worker.borrow_mut();
-                let worker = worker.as_mut().unwrap();
-                stealers = worker.back.stealers();
+            while let Ok(msg) = cmd.try_recv() {
+                match msg {
+                    Command::Add(key, value) => stealers.push((key, value)),
+                    Command::Remove(key) => {
+                        let mut idx = None;
+                        for (i, &(k, _)) in stealers.iter().enumerate() {
+                            if key == k {
+                                idx = Some(i);
+                            }
+                        }
+                        idx.map(|i| stealers.swap_remove(i));
+                    },
+                    Command::Exit => return
+                }
             }
 
         }
