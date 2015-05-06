@@ -5,7 +5,6 @@
 use std::sync::atomic::*;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Sender, Receiver, channel};
-use std::boxed::FnBox;
 use std::collections::HashMap;
 use atom::*;
 use pulse::*;
@@ -21,7 +20,7 @@ const REF_COUNT: usize = 0x7FFF_FFFF;
 
 struct Inner {
     index: usize,
-    stealers: HashMap<usize, deque::Stealer<Box<FnBox()+Send>>>,
+    stealers: HashMap<usize, deque::Stealer<ReadyTask>>,
     workers: HashMap<usize, Sender<worker::Command>>
 }
 
@@ -29,9 +28,35 @@ struct Inner {
 pub struct Backend {
     active: AtomicUsize,
     work_done: Atom<Pulse>,
-
-    pub global_queue: Mutex<deque::Worker<Box<FnBox()+Send>>>,
+    global_queue: Mutex<deque::Worker<ReadyTask>>,
     workers: Mutex<Inner>,
+}
+
+pub struct ReadyTask {
+    // the task to be run
+    task: Box<Task+Send>,
+    // this is dropped when a task is complete
+    // it may be cloned to `extend` the life of
+    // a task
+    complete_ack: Arc<DoneAck>,
+    // this is needed for spawning of extended tasks
+    complete_signal: Signal
+}
+
+impl ReadyTask {
+    pub fn run(self, back: Arc<Backend>) {
+        let ReadyTask{task, complete_signal, complete_ack} = self;
+
+        let mut back = (back, complete_signal, complete_ack);
+        task.run(&mut back);
+
+        let (back, sig, ack) = back;
+        // Drop this before active_dec so that any pending
+        // tasks are started before we try and signal the backend
+        // that work is done
+        drop((sig, ack));
+        back.active_dec();
+    }
 }
 
 impl Backend {
@@ -87,6 +112,11 @@ impl Backend {
         }
     }
 
+    /// Start a task on the global work queue
+    fn start_on_global_queue(&self, rt: ReadyTask) {
+        let guard = self.global_queue.lock().unwrap();
+        guard.push(rt);
+    }
 
     /// Start a task that will run once all the Handle's have
     /// been completed.
@@ -113,17 +143,13 @@ impl Backend {
         let sig = done_signal.clone();
         signal.callback(move || {
             if back.try_active_inc() {
-                worker::start(&back.clone(), Box::new(move || {
-                    let mut back = (back, sig, ack);
-                    task.inner.run(&mut back);
-
-                    let (back, sig, ack) = back;
-                    // Drop this before active_dec so that any pending
-                    // tasks are started before we try and signal the backend
-                    // that work is done
-                    drop((sig, ack));
-                    back.active_dec();
-                }));
+                worker::start(ReadyTask {
+                    task: task.inner,
+                    complete_signal: sig,
+                    complete_ack: ack
+                }).err().map(|rt| {
+                    back.start_on_global_queue(rt);
+                });
             }
         });
 
@@ -167,7 +193,7 @@ impl Backend {
 
     /// Create a new deque
     pub fn new_deque(&self) -> (usize,
-                                deque::Worker<Box<FnBox()+Send>>,
+                                deque::Worker<ReadyTask>,
                                 Receiver<worker::Command>) {
 
         let buffer = deque::BufferPool::new();
