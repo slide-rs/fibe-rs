@@ -2,15 +2,15 @@
 //! on a separate thread. All it does is listening to a command
 //! channel and starting new tasks when the time comes.
 
-use std::thread;
 use std::sync::atomic::*;
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{SyncSender, Sender, Receiver, sync_channel, channel};
+use std::sync::mpsc::{Sender, Receiver, channel};
 use std::boxed::FnBox;
 use std::collections::HashMap;
 use atom::*;
 use pulse::*;
 use deque;
+use num_cpus;
 
 use {Handle, Wait, Task, Schedule, IntoTask};
 use worker;
@@ -18,9 +18,6 @@ use worker;
 // Todo 64bit version
 const BLOCK: usize = 0x8000_0000;
 const REF_COUNT: usize = 0x7FFF_FFFF;
-
-// Todo, user define...
-const MAX_IDLE: usize = 32;
 
 struct Inner {
     index: usize,
@@ -57,7 +54,7 @@ impl Backend {
             }),
         });
 
-        for _ in 0..2 {
+        for _ in 0..num_cpus::get() {
             worker::Worker::new(back.clone()).start();
         }
         back
@@ -164,7 +161,7 @@ impl Backend {
 
         let guard = self.workers.lock().unwrap();
         for (_, send) in guard.workers.iter() {
-            send.send(worker::Command::Exit);
+            let _ = send.send(worker::Command::Exit);
         }
     }
 
@@ -180,7 +177,10 @@ impl Backend {
         let index = guard.index;
         guard.index += 1;
         for (&key, stealer) in guard.stealers.iter() {
-            send.send(worker::Command::Add(key, stealer.clone()));
+            send.send(worker::Command::Add(key, stealer.clone())).unwrap();
+        }
+        for (_, workers) in guard.workers.iter() {
+            workers.send(worker::Command::Add(index, stealer.clone())).unwrap();
         }
         guard.stealers.insert(index, stealer);
         guard.workers.insert(index, send);

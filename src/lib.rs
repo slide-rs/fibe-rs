@@ -1,4 +1,4 @@
-#![feature(core)]
+#![feature(core, libc)]
 #![deny(missing_docs)]
 
 //! A simple task queue with dependency tracking.
@@ -9,6 +9,8 @@ extern crate pulse;
 extern crate atom;
 extern crate deque;
 extern crate rand;
+extern crate libc;
+extern crate num_cpus;
 
 use pulse::Signal;
 
