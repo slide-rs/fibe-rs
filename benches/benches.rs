@@ -6,6 +6,7 @@ extern crate pulse;
 
 use fibe::*;
 use test::Bencher;
+use pulse::Signals;
 
 #[bench]
 fn start_die(b: &mut Bencher) {
@@ -63,22 +64,78 @@ fn chain_1_000_wait(b: &mut Bencher) {
     });
 }
 
-fn fibb(depth: usize, front: &mut fibe::Frontend) -> fibe::Handle {
+fn fibb_steal(depth: usize, front: &mut fibe::Frontend) -> fibe::Handle {
     let task = task(move |_| {});
     if depth == 0 {
         task
     } else {
-        let left = fibb(depth - 1, front);
-        let right = fibb(depth - 1, front);
+        let left = fibb_steal(depth - 1, front);
+        let right = fibb_steal(depth - 1, front);
         task.after(left).after(right)
     }.start(front)
 }
 
 #[bench]
-fn fibb_depth_6(b: &mut Bencher) {
+fn bench_fibb_steal(b: &mut Bencher) {
+    let mut front = fibe::Frontend::new();
     b.iter(|| {
-        let mut front = fibe::Frontend::new();
-        fibb(6, &mut front);
-        front.die(fibe::Wait::Pending);
+        fibb_steal(8, &mut front).wait().unwrap();
     });
+}
+
+#[bench]
+fn fanout_1_000(b: &mut Bencher) {
+    let mut front = fibe::Frontend::new();
+    b.iter(|| {
+        let (signal, pulse) = pulse::Signal::new();
+        let signals: Vec<pulse::Signal> = (0..1_000).map(|_|
+            task(move |_| {}).after(signal.clone()).start(&mut front)
+        ).collect();
+        pulse.pulse();
+        pulse::Barrier::new(&signals).wait().unwrap();
+    });
+}
+
+struct Repeater(usize);
+
+impl ResumableTask for Repeater {
+    #[inline(never)]
+    fn resume(&mut self, _: &mut Schedule) -> WaitState {
+        self.0 -= 1;
+        if self.0 == 0 {
+            WaitState::Completed
+        } else {
+            WaitState::Pending(pulse::Signal::pulsed())
+        }
+    }
+}
+
+#[bench]
+fn repeat_1_000(b: &mut Bencher) {
+    let mut front = fibe::Frontend::new();
+    b.iter(|| {
+        Repeater(1_000).start(&mut front).wait().unwrap();
+    });   
+}
+
+#[bench]
+fn repeat_100_x_100(b: &mut Bencher) {
+    let mut front = fibe::Frontend::new();
+    b.iter(|| {
+        let signals: Vec<pulse::Signal> = (0..100).map(|_|
+            Repeater(100).start(&mut front)
+        ).collect();
+        pulse::Barrier::new(&signals).wait().unwrap();
+    });   
+}
+
+#[bench]
+fn repeat_1_000_x_1_000(b: &mut Bencher) {
+    let mut front = fibe::Frontend::new();
+    b.iter(|| {
+        let signals: Vec<pulse::Signal> = (0..1_000).map(|_|
+            Repeater(1_000).start(&mut front)
+        ).collect();
+        pulse::Barrier::new(&signals).wait().unwrap();
+    });   
 }

@@ -2,44 +2,87 @@
 //! on a separate thread. All it does is listening to a command
 //! channel and starting new tasks when the time comes.
 
-use std::thread;
 use std::sync::atomic::*;
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{SyncSender, Sender, Receiver, sync_channel, channel};
-use std::boxed::FnBox;
+use std::sync::mpsc::{Sender, Receiver, channel};
+use std::collections::HashMap;
 use atom::*;
 use pulse::*;
+use deque;
+use num_cpus;
 
 use {Handle, Wait, Task, Schedule, IntoTask};
+use worker;
 
-// Todo 64bit verison
+// Todo 64bit version
 const BLOCK: usize = 0x8000_0000;
 const REF_COUNT: usize = 0x7FFF_FFFF;
 
-// Todo, user define...
-const MAX_IDLE: usize = 32;
+struct Inner {
+    index: usize,
+    stealers: HashMap<usize, deque::Stealer<ReadyTask>>,
+    workers: HashMap<usize, Sender<worker::Command>>
+}
 
 /// Task queue back-end.
 pub struct Backend {
     active: AtomicUsize,
     work_done: Atom<Pulse>,
+    global_queue: Mutex<deque::Worker<ReadyTask>>,
+    workers: Mutex<Inner>,
+}
 
-    // Idle queue of threads
-    threads: Mutex<Receiver<Sender<Box<FnBox()+Send>>>>,
-    queue: Mutex<SyncSender<Sender<Box<FnBox()+Send>>>>
+pub struct ReadyTask {
+    // the task to be run
+    task: Box<Task+Send>,
+    // this is dropped when a task is complete
+    // it may be cloned to `extend` the life of
+    // a task
+    complete_ack: Arc<DoneAck>,
+    // this is needed for spawning of extended tasks
+    complete_signal: Signal
+}
+
+impl ReadyTask {
+    pub fn run(self, back: Arc<Backend>) {
+        let ReadyTask{task, complete_signal, complete_ack} = self;
+
+        let mut back = (back, complete_signal, complete_ack);
+        task.run(&mut back);
+
+        let (back, sig, ack) = back;
+        // Drop this before active_dec so that any pending
+        // tasks are started before we try and signal the backend
+        // that work is done
+        drop((sig, ack));
+        back.active_dec();
+    }
 }
 
 impl Backend {
     /// Create a new back-end.
-    pub fn new() -> Backend {
-        let (tx, rx) = sync_channel(MAX_IDLE);
+    pub fn new() -> Arc<Backend> {
+        let buffer = deque::BufferPool::new();
+        let (worker, stealer) = buffer.deque();
 
-        Backend {
+        let mut map = HashMap::new();
+        map.insert(0, stealer);
+
+        let back = Arc::new(Backend {
             active: AtomicUsize::new(0),
             work_done: Atom::empty(),
-            threads: Mutex::new(rx),
-            queue: Mutex::new(tx)
+            global_queue: Mutex::new(worker),
+            workers: Mutex::new(Inner {
+                index: 1,
+                stealers: map,
+                workers: HashMap::new()
+            }),
+        });
+
+        for _ in 0..num_cpus::get() {
+            worker::Worker::new(back.clone()).start();
         }
+        back
     }
 
     /// Check to see if the scheduler has put a hold on the
@@ -69,40 +112,10 @@ impl Backend {
         }
     }
 
-    /// Creates a thread iff needed
-    fn thread(&self) -> Sender<Box<FnBox()+Send>> {
-        let guard = self.threads.lock().unwrap();
-        if let Ok(thread) = guard.try_recv() {
-            return thread;
-        }
-
-        drop(guard);
-        let idle_msg = self.queue.lock().unwrap().clone();
-
-        let (tx, rx): (Sender<Box<FnBox()+Send>>, Receiver<Box<FnBox()+Send>>) = channel();
-        thread::spawn(move || {
-            // run the first task
-            if let Ok(work) = rx.recv() {
-                work();
-            } else {
-                return;
-            }
-
-            // run any new messages
-            loop {
-                let (tx, rx) = channel();
-                if let Err(_) = idle_msg.try_send(tx) {
-                    return;
-                }
-
-                if let Ok(work) = rx.recv() {
-                    work();
-                } else {
-                    return;
-                }
-            }
-        });
-        tx
+    /// Start a task on the global work queue
+    fn start_on_global_queue(&self, rt: ReadyTask) {
+        let guard = self.global_queue.lock().unwrap();
+        guard.push(rt);
     }
 
     /// Start a task that will run once all the Handle's have
@@ -130,18 +143,13 @@ impl Backend {
         let sig = done_signal.clone();
         signal.callback(move || {
             if back.try_active_inc() {
-                let thread = back.thread();
-                thread.send(Box::new(move || {
-                    let mut back = (back, sig, ack);
-                    task.inner.run(&mut back);
-
-                    let (back, sig, ack) = back;
-                    // Drop this before active_dec so that any pending
-                    // tasks are started before we try and signal the backend
-                    // that work is done
-                    drop((sig, ack));
-                    back.active_dec();
-                })).unwrap();
+                worker::start(ReadyTask {
+                    task: task.inner,
+                    complete_signal: sig,
+                    complete_ack: ack
+                }).err().map(|rt| {
+                    back.start_on_global_queue(rt);
+                });
             }
         });
 
@@ -173,11 +181,36 @@ impl Backend {
         };
 
         // Wait until the count is equal to 0.
-        if count & REF_COUNT == 0 {
-            return;
-        } else {
+        if count & REF_COUNT != 0 {
             signal.wait().unwrap();
         }
+
+        let guard = self.workers.lock().unwrap();
+        for (_, send) in guard.workers.iter() {
+            let _ = send.send(worker::Command::Exit);
+        }
+    }
+
+    /// Create a new deque
+    pub fn new_deque(&self) -> (usize,
+                                deque::Worker<ReadyTask>,
+                                Receiver<worker::Command>) {
+
+        let buffer = deque::BufferPool::new();
+        let (worker, stealer) = buffer.deque();
+        let (send, recv) = channel();
+        let mut guard = self.workers.lock().unwrap();
+        let index = guard.index;
+        guard.index += 1;
+        for (&key, stealer) in guard.stealers.iter() {
+            send.send(worker::Command::Add(key, stealer.clone())).unwrap();
+        }
+        for (_, workers) in guard.workers.iter() {
+            workers.send(worker::Command::Add(index, stealer.clone())).unwrap();
+        }
+        guard.stealers.insert(index, stealer);
+        guard.workers.insert(index, send);
+        (index, worker, recv)
     }
 }
 
