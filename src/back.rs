@@ -73,7 +73,7 @@ impl Backend {
             work_done: Atom::empty(),
             global_queue: Mutex::new(worker),
             workers: Mutex::new(Inner {
-                index: 0,
+                index: 1,
                 stealers: map,
                 workers: HashMap::new()
             }),
