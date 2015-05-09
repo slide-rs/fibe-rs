@@ -42,11 +42,11 @@ pub trait Schedule {
     /// Add a new task with selected dependencies. This doesn't interrupt any
     /// tasks in-flight. The task will actually start as soon as all 
     /// dependencies are finished.
-    fn add_task(&self, task: TaskBuilder) -> Handle;
+    fn add_task(&mut self, task: TaskBuilder) -> Handle;
 }
 
 impl Schedule for Frontend {
-    fn add_task(&self, task: TaskBuilder) -> Handle {
-        Backend::start(self.backend.clone(), task, None)
+    fn add_task(&mut self, task: TaskBuilder) -> Handle {
+        Backend::start(self.backend.clone(), task, &mut None)
     }
 }

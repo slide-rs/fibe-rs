@@ -6,7 +6,8 @@ use std::sync::atomic::*;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Sender, Receiver, channel};
 use std::collections::HashMap;
-use atom::*;
+use std::thread;
+
 use pulse::*;
 use deque;
 use num_cpus;
@@ -14,20 +15,16 @@ use num_cpus;
 use {Handle, Wait, Task, Schedule, IntoTask};
 use worker;
 
-// Todo 64bit version
-const BLOCK: usize = 0x8000_0000;
-const REF_COUNT: usize = 0x7FFF_FFFF;
-
 struct Inner {
     index: usize,
     stealers: HashMap<usize, deque::Stealer<ReadyTask>>,
-    workers: HashMap<usize, Sender<worker::Command>>
+    workers: HashMap<usize, Sender<worker::Command>>,
+    joins: Vec<thread::JoinHandle<()>>
 }
 
 /// Task queue back-end.
 pub struct Backend {
-    active: AtomicUsize,
-    work_done: Atom<Pulse>,
+    active: AtomicBool,
     global_queue: Mutex<deque::Worker<ReadyTask>>,
     workers: Mutex<Inner>,
 }
@@ -38,24 +35,15 @@ pub struct ReadyTask {
     // this is dropped when a task is complete
     // it may be cloned to `extend` the life of
     // a task
-    complete_ack: Arc<DoneAck>,
-    // this is needed for spawning of extended tasks
-    complete_signal: Signal
+    complete_ack: Option<(Signal, DoneAck)>
 }
 
 impl ReadyTask {
     pub fn run(self, back: Arc<Backend>) {
-        let ReadyTask{task, complete_signal, complete_ack} = self;
+        let ReadyTask{task, mut complete_ack} = self;
 
-        let mut back = (back, complete_signal, complete_ack);
+        let mut back = (back, &mut complete_ack);
         task.run(&mut back);
-
-        let (back, sig, ack) = back;
-        // Drop this before active_dec so that any pending
-        // tasks are started before we try and signal the backend
-        // that work is done
-        drop((sig, ack));
-        back.active_dec();
     }
 }
 
@@ -69,13 +57,13 @@ impl Backend {
         map.insert(0, stealer);
 
         let back = Arc::new(Backend {
-            active: AtomicUsize::new(0),
-            work_done: Atom::empty(),
+            active: AtomicBool::new(false),
             global_queue: Mutex::new(worker),
             workers: Mutex::new(Inner {
                 index: 1,
                 stealers: map,
-                workers: HashMap::new()
+                workers: HashMap::new(),
+                joins: Vec::new()
             }),
         });
 
@@ -83,33 +71,6 @@ impl Backend {
             worker::Worker::new(back.clone()).start();
         }
         back
-    }
-
-    /// Check to see if the scheduler has put a hold on the
-    /// starting of new tasks (occurs during shutdown)
-    fn try_active_inc(&self) -> bool {
-        loop {
-            let value = self.active.load(Ordering::SeqCst);
-            if value & BLOCK == BLOCK {
-                return false;
-            }
-
-            // This is used instead of a fetch_add to allow for checking of the
-            // block flag
-            if value == self.active.compare_and_swap(value, value+1, Ordering::SeqCst) {
-                return true;
-            }
-        }
-    }
-
-    /// Decrement the active count, wakeing up scheduler
-    /// if you were the last running task.
-    fn active_dec(&self) {
-        // This should not effect the flags
-        let count = self.active.fetch_sub(1, Ordering::SeqCst);
-        if count & REF_COUNT == 1 {
-            self.work_done.take().map(|p| p.pulse());
-        }
     }
 
     /// Start a task on the global work queue
@@ -121,14 +82,14 @@ impl Backend {
     /// Start a task that will run once all the Handle's have
     /// been completed.
     pub fn start(back: Arc<Backend>, mut task: TaskBuilder,
-                 ack: Option<(Signal, Arc<DoneAck>)>) -> Handle {
+                 ack: &mut Option<(Signal, DoneAck)>) -> Handle {
 
         // Create or reuse the DoneAck
         let (done_signal, ack) = if task.extend {
-            ack.expect("No parent thread to extend")
+            ack.take().expect("No parent thread to extend, A task may only be extended once.")
         } else {
             let (signal, complete) = Signal::new();
-            (signal, Arc::new(DoneAck::new(complete)))
+            (signal, DoneAck::new(complete))
         };
 
         // Create the wait signal if needed
@@ -142,14 +103,19 @@ impl Backend {
 
         let sig = done_signal.clone();
         signal.callback(move || {
-            if back.try_active_inc() {
-                worker::start(ReadyTask {
+            if !back.active.load(Ordering::SeqCst) {
+                let try_thread = worker::start(ReadyTask {
                     task: task.inner,
-                    complete_signal: sig,
-                    complete_ack: ack
-                }).err().map(|rt| {
-                    back.start_on_global_queue(rt);
+                    complete_ack: Some((sig, ack)),
                 });
+
+                match try_thread {
+                    Ok(b) => b,
+                    Err(rt) => {
+                        back.start_on_global_queue(rt);
+                        true
+                    }
+                };
             }
         });
 
@@ -158,36 +124,22 @@ impl Backend {
 
     /// Kill the backend, wait until the condition is satisfied.
     pub fn exit(&self, wait: Wait) {
-        let (signal, pulse) = Signal::new();
-        // Install the pulse (if needed)
-        match wait {
-            Wait::Active | Wait::Pending => {
-                self.work_done.swap(pulse);
-            }
-            Wait::None => {
-                pulse.pulse()
-            }
-        }
-
         // read the current active count, OR in the BLOCK
         // flag if needed for the wait
-        let count = match wait {
+        match wait {
             Wait::None | Wait::Active => {
-                self.active.fetch_or(BLOCK, Ordering::SeqCst)
+                self.active.store(true, Ordering::SeqCst);
             }
-            Wait::Pending => {
-                self.active.load(Ordering::SeqCst)
-            }
+            Wait::Pending => ()
         };
 
-        // Wait until the count is equal to 0.
-        if count & REF_COUNT != 0 {
-            signal.wait().unwrap();
-        }
-
-        let guard = self.workers.lock().unwrap();
+        let mut guard = self.workers.lock().unwrap();
         for (_, send) in guard.workers.iter() {
             let _ = send.send(worker::Command::Exit);
+        }
+
+        while let Some(join) = guard.joins.pop() {
+            join.join().unwrap();
         }
     }
 
@@ -212,17 +164,23 @@ impl Backend {
         guard.workers.insert(index, send);
         (index, worker, recv)
     }
-}
 
-impl Schedule for (Arc<Backend>, Signal, Arc<DoneAck>)  {
-    fn add_task(&self, task: TaskBuilder) -> Handle {
-        Backend::start(self.0.clone(), task, Some((self.1.clone(), self.2.clone())))
+    ///
+    pub fn register_worker(&self, handle: thread::JoinHandle<()>) {
+        let mut guard = self.workers.lock().unwrap();
+        guard.joins.push(handle);
     }
 }
 
-impl<'a> Schedule for &'a mut (Arc<Backend>, Signal, Arc<DoneAck>)  {
-    fn add_task(&self, task: TaskBuilder) -> Handle {
-        Backend::start(self.0.clone(), task, Some((self.1.clone(), self.2.clone())))
+impl<'a> Schedule for (Arc<Backend>, &'a mut Option<(Signal, DoneAck)>)  {
+    fn add_task(&mut self, task: TaskBuilder) -> Handle {
+        Backend::start(self.0.clone(), task, self.1)
+    }
+}
+
+impl<'a> Schedule for &'a mut (Arc<Backend>, &'a mut Option<(Signal, DoneAck)>)  {
+    fn add_task(&mut self, task: TaskBuilder) -> Handle {
+        Backend::start(self.0.clone(), task, self.1)
     }
 }
 
