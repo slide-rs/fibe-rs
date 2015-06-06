@@ -127,13 +127,13 @@ pub fn start(rt: ReadyTask) -> Result<bool, ReadyTask> {
 pub struct FiberSchedule;
 
 impl super::Schedule for FiberSchedule {
-    fn add_task(&mut self, task: super::TaskBuilder) -> super::Handle {
+    fn add_task(&mut self, task: super::TaskBuilder) {
         let back = WORKER.with(|worker| {
             worker.borrow()
                   .as_ref()
                   .expect("a fiber was resumed outside of a worker")
                   .back.clone()
         });
-        Backend::start(back, task, &mut None)
+        Backend::start(back, task)
     }
 }

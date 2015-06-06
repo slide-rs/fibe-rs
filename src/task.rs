@@ -67,7 +67,7 @@ pub trait IntoTask: Sized {
     }
 
     /// equivalent of `TaskBuilder::new(self).start(sched)`
-    fn start(self, sched: &mut Schedule) -> Signal {
+    fn start(self, sched: &mut Schedule) {
         TaskBuilder::new(self).start(sched)
     }
 }
