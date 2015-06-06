@@ -2,7 +2,9 @@
 //! on the user side, allowing to add more tasks to the queue.
 
 use std::sync::Arc;
-use {Wait, TaskBuilder};
+use pulse::Signal;
+use bran;
+use {Wait};
 use back::Backend;
 
 
@@ -42,11 +44,11 @@ pub trait Schedule {
     /// Add a new task with selected dependencies. This doesn't interrupt any
     /// tasks in-flight. The task will actually start as soon as all 
     /// dependencies are finished.
-    fn add_task(&mut self, task: TaskBuilder);
+    fn add_task(&mut self, task: bran::Handle, after: Vec<Signal>);
 }
 
 impl Schedule for Frontend {
-    fn add_task(&mut self, task: TaskBuilder) {
-        Backend::start(self.backend.clone(), task)
+    fn add_task(&mut self, task: bran::Handle, after: Vec<Signal>) {
+        Backend::start(self.backend.clone(), task, after)
     }
 }

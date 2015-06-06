@@ -3,10 +3,12 @@
 extern crate fibe;
 extern crate test;
 extern crate pulse;
+extern crate future_pulse;
 
 use fibe::*;
 use test::Bencher;
 use pulse::Signals;
+use future_pulse::Future;
 
 #[bench]
 fn start_die(b: &mut Bencher) {
@@ -22,7 +24,7 @@ fn chain_10_use_die(b: &mut Bencher) {
         let mut front = fibe::Frontend::new();
         let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
-            last = task(move |_| {}).after(last).start(&mut front);
+            last = task(move |_| {}).after(last.signal()).start(&mut front);
         }
         front.die(fibe::Wait::Pending);
     });
@@ -34,7 +36,7 @@ fn chain_10_wait(b: &mut Bencher) {
     b.iter(|| {
         let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
-            last = task(move |_| {}).after(last).start(&mut front);
+            last = task(move |_| {}).after(last.signal()).start(&mut front);
         }
         last.wait().unwrap();
     });
@@ -46,7 +48,7 @@ fn chain_1_000_use_die(b: &mut Bencher) {
         let mut front = fibe::Frontend::new();
         let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..1_000 {
-            last = task(move |_| {}).after(last).start(&mut front);
+            last = task(move |_| {}).after(last.signal()).start(&mut front);
         }
         front.die(fibe::Wait::Pending);
     });
@@ -58,20 +60,21 @@ fn chain_1_000_wait(b: &mut Bencher) {
     b.iter(|| {
         let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..1_000 {
-            last = task(move |_| {}).after(last).start(&mut front);
+            last = task(move |_| {}).after(last.signal()).start(&mut front);
         }
         last.wait().unwrap();
     });
 }
 
-fn fibb_steal(depth: usize, front: &mut fibe::Frontend) -> fibe::Handle {
-    let task = task(move |_| {});
+
+fn fibb_steal(depth: usize, front: &mut fibe::Frontend) -> Future<u64> {
+    let task = task(move |_| {1});
     if depth == 0 {
         task
     } else {
         let left = fibb_steal(depth - 1, front);
         let right = fibb_steal(depth - 1, front);
-        task.after(left).after(right)
+        task.after(left.signal()).after(right.signal())
     }.start(front)
 }
 
@@ -89,13 +92,14 @@ fn fanout_1_000(b: &mut Bencher) {
     b.iter(|| {
         let (signal, pulse) = pulse::Signal::new();
         let signals: Vec<pulse::Signal> = (0..1_000).map(|_|
-            task(move |_| {}).after(signal.clone()).start(&mut front)
+            task(move |_| {}).after(signal.clone()).start(&mut front).signal()
         ).collect();
         pulse.pulse();
         pulse::Barrier::new(&signals).wait().unwrap();
     });
 }
 
+/*
 struct Repeater(usize);
 
 impl ResumableTask for Repeater {
@@ -139,18 +143,17 @@ fn repeat_1_000_x_1_000(b: &mut Bencher) {
         pulse::Barrier::new(&signals).wait().unwrap();
     });   
 }
+*/
 
 #[bench]
 fn chain_1_000_fibers(b: &mut Bencher) {
     let mut front = Frontend::new();
     b.iter(|| {
-        let (mut s, p) = pulse::Signal::new();
+        let (mut s, p) = Future::new();
         for _ in 0..1_000 {
-            s = fiber(|_| {
-                s.wait().unwrap();
-            }).start(&mut front);
+            s = task(|_| s.get()).start(&mut front);
         }
-        p.pulse();
+        p.set(());
         s.wait().unwrap();
     });
 }
