@@ -122,3 +122,18 @@ pub fn start(rt: ReadyTask) -> Result<bool, ReadyTask> {
         }
     })
 }
+
+/// used for fibers to give them child task spawning
+pub struct FiberSchedule;
+
+impl super::Schedule for FiberSchedule {
+    fn add_task(&mut self, task: super::TaskBuilder) -> super::Handle {
+        let back = WORKER.with(|worker| {
+            worker.borrow()
+                  .as_ref()
+                  .expect("a fiber was resumed outside of a worker")
+                  .back.clone()
+        });
+        Backend::start(back, task, &mut None)
+    }
+}
