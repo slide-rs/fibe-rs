@@ -2,9 +2,11 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::thread;
+use std::sync::mpsc::Receiver;
+use std::boxed::FnBox;
+
 use pulse::Signal;
 use libc::funcs::posix88::unistd::usleep;
-use std::sync::mpsc::Receiver;
 use rand::{self, Rng};
 use deque::{self, Stolen};
 use back::{Backend, ReadyTask};
@@ -126,8 +128,9 @@ pub fn start(rt: ReadyTask) -> Result<bool, ReadyTask> {
 /// used for fibers to give them child task spawning
 pub struct FiberSchedule;
 
+
 impl super::Schedule for FiberSchedule {
-    fn add_task(&mut self, task: bran::Handle, after: Vec<Signal>) {
+    fn add_task(&mut self, task: Box<FnBox()+Send>, after: Vec<Signal>) {
         let back = WORKER.with(|worker| {
             worker.borrow()
                   .as_ref()
@@ -136,4 +139,14 @@ impl super::Schedule for FiberSchedule {
         });
         Backend::start(back, task, after)
     }
+}
+
+pub fn requeue(task: bran::Handle, after: Signal) {
+    let back = WORKER.with(|worker| {
+        worker.borrow()
+              .as_ref()
+              .expect("a fiber was resumed outside of a worker")
+              .back.clone()
+    });
+    Backend::enqueue(back, task, after)
 }

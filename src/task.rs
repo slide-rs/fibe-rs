@@ -1,15 +1,15 @@
 
+use std::boxed::FnBox;
 use pulse::Signal;
-use bran;
 use future_pulse::Future;
-use worker::FiberSchedule;
 
+use worker::FiberSchedule;
 use Schedule;
 
 /// A structure to help build a task
 pub struct TaskBuilder<T> {
     /// The task to be run
-    task: bran::Handle,
+    task: Box<FnBox()+Send>,
 
     /// The signals to wait on
     wait: Vec<Signal>,
@@ -39,7 +39,7 @@ pub fn task<F, T:Send+'static>(f: F) -> TaskBuilder<T>
 
     let (future, set) = Future::new();
     TaskBuilder {
-        task: bran::spawn(|| {
+        task: Box::new(|| {
             set.set(f(&mut FiberSchedule));
         }),
         wait: Vec::new(),

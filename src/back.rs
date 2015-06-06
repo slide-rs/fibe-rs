@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Sender, Receiver, channel};
 use std::collections::HashMap;
 use std::thread;
+use std::boxed::FnBox;
 
 use bran;
 use pulse::*;
@@ -28,6 +29,7 @@ pub struct Backend {
     active: AtomicBool,
     global_queue: Mutex<deque::Worker<ReadyTask>>,
     workers: Mutex<Inner>,
+    pool: bran::StackPool
 }
 
 /// A ready task
@@ -39,7 +41,7 @@ impl ReadyTask {
         let ReadyTask(task) = self;
         match task.run() {
             State::Pending(signal) => {
-                worker::FiberSchedule.add_task(task, vec![signal])
+                worker::requeue(task, signal);
             }
             State::PendingTimeout(_, _) => {
                 panic!("Timeouts are not supported")
@@ -67,6 +69,7 @@ impl Backend {
                 workers: HashMap::new(),
                 joins: Vec::new()
             }),
+            pool: bran::StackPool::new()
         });
 
         for _ in 0..num_cpus::get() {
@@ -83,7 +86,7 @@ impl Backend {
 
     /// Start a task that will run once all the Handle's have
     /// been completed.
-    pub fn start(back: Arc<Backend>, task: bran::Handle, mut after: Vec<Signal>) {
+    pub fn start(back: Arc<Backend>, task: Box<FnBox()+Send>, mut after: Vec<Signal>) {
         // Create the wait signal if needed
         let signal = if after.len() == 0 {
             Signal::pulsed()
@@ -94,6 +97,24 @@ impl Backend {
         };
 
         signal.callback(move || {
+            if !back.active.load(Ordering::SeqCst) {
+                let fiber = bran::fiber::Fiber::spawn_with(move || task.call_box(()), back.pool.clone());
+                let try_thread = worker::start(ReadyTask(fiber));
+                match try_thread {
+                    Ok(b) => b,
+                    Err(rt) => {
+                        back.start_on_global_queue(rt);
+                        true
+                    }
+                };
+            }
+        });
+    }
+
+    /// Start a task that will run once all the Handle's have
+    /// been completed.
+    pub fn enqueue(back: Arc<Backend>, task: bran::Handle, after: Signal) {
+        after.callback(move || {
             if !back.active.load(Ordering::SeqCst) {
                 let try_thread = worker::start(ReadyTask(task));
                 match try_thread {
@@ -158,7 +179,7 @@ impl Backend {
 }
 
 impl<'a> Schedule for Arc<Backend>  {
-    fn add_task(&mut self, task: bran::Handle, after: Vec<Signal>) {
+    fn add_task(&mut self, task: Box<FnBox()+Send>, after: Vec<Signal>) {
         Backend::start(self.clone(), task, after)
     }
 }

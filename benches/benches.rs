@@ -146,14 +146,22 @@ fn repeat_1_000_x_1_000(b: &mut Bencher) {
 */
 
 #[bench]
-fn chain_1_000_fibers(b: &mut Bencher) {
+fn chain_10_fibers(b: &mut Bencher) {
     let mut front = Frontend::new();
     b.iter(|| {
         let (mut s, p) = Future::new();
-        for _ in 0..1_000 {
+        for _ in 0..10 {
             s = task(|_| s.get()).start(&mut front);
         }
         p.set(());
-        s.wait().unwrap();
+        s.get();
+    });
+}
+
+#[bench]
+fn spawn(b: &mut Bencher) {
+    let mut front = Frontend::new();
+    b.iter(|| {
+        task(|_| {}).start(&mut front).get();
     });
 }

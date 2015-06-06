@@ -2,11 +2,11 @@
 //! on the user side, allowing to add more tasks to the queue.
 
 use std::sync::Arc;
+use std::boxed::FnBox;
 use pulse::Signal;
-use bran;
-use {Wait};
-use back::Backend;
 
+use back::Backend;
+use Wait;
 
 /// Queue front-end.
 pub struct Frontend {
@@ -44,11 +44,11 @@ pub trait Schedule {
     /// Add a new task with selected dependencies. This doesn't interrupt any
     /// tasks in-flight. The task will actually start as soon as all 
     /// dependencies are finished.
-    fn add_task(&mut self, task: bran::Handle, after: Vec<Signal>);
+    fn add_task(&mut self, task: Box<FnBox()+Send>, after: Vec<Signal>);
 }
 
 impl Schedule for Frontend {
-    fn add_task(&mut self, task: bran::Handle, after: Vec<Signal>) {
+    fn add_task(&mut self, task: Box<FnBox()+Send>, after: Vec<Signal>) {
         Backend::start(self.backend.clone(), task, after)
     }
 }
