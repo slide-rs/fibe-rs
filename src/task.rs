@@ -1,6 +1,7 @@
 
 use std::boxed::FnBox;
 use pulse::Signal;
+use bran;
 use {Schedule, TaskBuilder};
 
 /// Wait mode for a task
@@ -88,4 +89,19 @@ impl<T> IntoTask for T where T: ResumableTask+Send+'static {
 pub fn task<F>(f: F) -> TaskBuilder where F: FnOnce(&mut Schedule)+Send+'static {
     let f: Box<FnBox(&mut Schedule)+Send+'static> = Box::new(f);
     TaskBuilder::new(f)
+}
+
+impl ResumableTask for bran::Handle {
+    fn resume(&mut self, _: &mut Schedule) -> WaitState {
+        match self.run() {
+            bran::fiber::State::Finished |
+            bran::fiber::State::Panicked => {
+                WaitState::Completed
+            }
+            bran::fiber::State::PendingTimeout(sig, _) |
+            bran::fiber::State::Pending(sig) => {
+                WaitState::Pending(sig)
+            }
+        }
+    }
 }

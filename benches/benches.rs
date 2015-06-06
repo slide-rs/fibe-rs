@@ -139,3 +139,18 @@ fn repeat_1_000_x_1_000(b: &mut Bencher) {
         pulse::Barrier::new(&signals).wait().unwrap();
     });   
 }
+
+#[bench]
+fn chain_1_000_fibers(b: &mut Bencher) {
+    let mut front = Frontend::new();
+    b.iter(|| {
+        let (mut s, p) = pulse::Signal::new();
+        for _ in 0..1_000 {
+            s = fiber(|_| {
+                s.wait().unwrap();
+            }).start(&mut front);
+        }
+        p.pulse();
+        s.wait().unwrap();
+    });
+}

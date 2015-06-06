@@ -18,5 +18,8 @@ num_cpus = "*"
 [dependencies.pulse]
 features = ["callback"]
 
+[dependencies.bran]
+git = "https://github.com/slide-rs/bran.git"
+
 [dev-dependencies]
 timebomb = "*"

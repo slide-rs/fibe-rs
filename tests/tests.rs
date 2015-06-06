@@ -1,5 +1,6 @@
 extern crate fibe;
 extern crate timebomb;
+extern crate pulse;
 
 use fibe::*;
 use timebomb::timeout_ms;
@@ -146,5 +147,39 @@ fn resumeable_task() {
         let count = CountDown(1000, tx);
         count.start(&mut front).wait().unwrap();
         rx.try_recv().ok().expect("Task should have sent an ack");
+    }, 3000);
+}
+
+#[test]
+fn fiber_test() {
+    timeout_ms(|| {
+        let mut front = Frontend::new();
+        let (s0, p0) = pulse::Signal::new();
+        let (s1, p1) = pulse::Signal::new();
+        fiber(|_| {
+            s0.wait().unwrap();
+            p1.pulse();
+        }).start(&mut front);
+        
+        assert!(s1.is_pending());
+        p0.pulse();
+        s1.wait().unwrap();
+    }, 3000);
+}
+
+
+#[test]
+fn fiber_test_1k() {
+    timeout_ms(|| {
+        let mut front = Frontend::new();
+
+        let (mut s, p) = pulse::Signal::new();
+        for _ in 0..1_000 {
+            s = fiber(|_| {
+                s.wait().unwrap();
+            }).start(&mut front);
+        }
+        p.pulse();
+        s.wait().unwrap();
     }, 3000);
 }
