@@ -1,6 +1,6 @@
 [package]
 name = "fibe"
-version = "0.1.0"
+version = "0.2.0"
 license = "Apache-2.0"
 keywords = ["gamedev"]
 authors = ["Fibe-rs Hackers"]
@@ -20,6 +20,9 @@ features = ["callback"]
 
 [dependencies.bran]
 git = "https://github.com/slide-rs/bran.git"
+
+[dependencies.future_pulse]
+git = "https://github.com/slide-rs/future_pulse.git"
 
 [dev-dependencies]
 timebomb = "*"

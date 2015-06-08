@@ -2,12 +2,15 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::thread;
-use libc::funcs::posix88::unistd::usleep;
 use std::sync::mpsc::Receiver;
+use std::boxed::FnBox;
+
+use pulse::Signal;
+use libc::funcs::posix88::unistd::usleep;
 use rand::{self, Rng};
 use deque::{self, Stolen};
 use back::{Backend, ReadyTask};
-
+use bran;
 
 pub enum Command {
     Add(usize, deque::Stealer<ReadyTask>),
@@ -53,7 +56,6 @@ impl Worker {
 fn work() {
     WORKER.with(|worker| {
         let cmd = worker.borrow_mut().as_mut().unwrap().command.take().unwrap();
-        let back = worker.borrow().as_ref().unwrap().back.clone();
 
         let mut rand = rand::XorShiftRng::new_unseeded();
         let mut stealers: Vec<(usize, deque::Stealer<ReadyTask>)> = Vec::new();
@@ -65,7 +67,7 @@ fn work() {
         while run {
             // Try to grab form our own queue
             if let Some(task) = worker.borrow().as_ref().unwrap().queue.pop() {
-                task.run(back.clone());
+                task.run();
                 i = 0;
                 backoff = 0;
                 continue;
@@ -79,7 +81,7 @@ fn work() {
                     let x: usize = rand.gen();
                     let x = x % stealers.len();
                     if let Stolen::Data(task) = stealers[x].1.steal() {
-                        task.run(back.clone());
+                        task.run();
                         i = 0;
                         backoff = 0;
                         break;
@@ -102,7 +104,8 @@ fn work() {
 
                     if i != 0 {
                         backoff += 5;
-                        unsafe { usleep(backoff) }; 
+                        unsafe { usleep(backoff) };
+                        i = stealers.len();
                     }
                 }
             }
@@ -126,14 +129,25 @@ pub fn start(rt: ReadyTask) -> Result<bool, ReadyTask> {
 /// used for fibers to give them child task spawning
 pub struct FiberSchedule;
 
+
 impl super::Schedule for FiberSchedule {
-    fn add_task(&mut self, task: super::TaskBuilder) -> super::Handle {
+    fn add_task(&mut self, task: Box<FnBox()+Send>, after: Vec<Signal>) {
         let back = WORKER.with(|worker| {
             worker.borrow()
                   .as_ref()
                   .expect("a fiber was resumed outside of a worker")
                   .back.clone()
         });
-        Backend::start(back, task, &mut None)
+        Backend::start(back, task, after)
     }
+}
+
+pub fn requeue(task: bran::Handle, after: Signal) {
+    let back = WORKER.with(|worker| {
+        worker.borrow()
+              .as_ref()
+              .expect("a fiber was resumed outside of a worker")
+              .back.clone()
+    });
+    Backend::enqueue(back, task, after)
 }

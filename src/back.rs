@@ -7,12 +7,14 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Sender, Receiver, channel};
 use std::collections::HashMap;
 use std::thread;
+use std::boxed::FnBox;
 
+use bran;
 use pulse::*;
 use deque;
 use num_cpus;
 
-use {Handle, Wait, Task, Schedule, IntoTask};
+use {Wait, Schedule};
 use worker;
 
 struct Inner {
@@ -27,23 +29,25 @@ pub struct Backend {
     active: AtomicBool,
     global_queue: Mutex<deque::Worker<ReadyTask>>,
     workers: Mutex<Inner>,
+    pool: bran::StackPool
 }
 
-pub struct ReadyTask {
-    // the task to be run
-    task: Box<Task+Send>,
-    // this is dropped when a task is complete
-    // it may be cloned to `extend` the life of
-    // a task
-    complete_ack: Option<(Signal, DoneAck)>
-}
+/// A ready task
+pub struct ReadyTask(bran::Handle);
 
 impl ReadyTask {
-    pub fn run(self, back: Arc<Backend>) {
-        let ReadyTask{task, mut complete_ack} = self;
-
-        let mut back = (back, &mut complete_ack);
-        task.run(&mut back);
+    pub fn run(self) {
+        use bran::fiber::State;
+        let ReadyTask(task) = self;
+        match task.run() {
+            State::Pending(signal) => {
+                worker::requeue(task, signal);
+            }
+            State::PendingTimeout(_, _) => {
+                panic!("Timeouts are not supported")
+            }
+            State::Finished | State::Panicked => ()
+        }
     }
 }
 
@@ -65,6 +69,7 @@ impl Backend {
                 workers: HashMap::new(),
                 joins: Vec::new()
             }),
+            pool: bran::StackPool::new()
         });
 
         for _ in 0..num_cpus::get() {
@@ -81,34 +86,20 @@ impl Backend {
 
     /// Start a task that will run once all the Handle's have
     /// been completed.
-    pub fn start(back: Arc<Backend>, mut task: TaskBuilder,
-                 ack: &mut Option<(Signal, DoneAck)>) -> Handle {
-
-        // Create or reuse the DoneAck
-        let (done_signal, ack) = if task.extend {
-            ack.take().expect("No parent thread to extend, A task may only be extended once.")
-        } else {
-            let (signal, complete) = Signal::new();
-            (signal, DoneAck::new(complete))
-        };
-
+    pub fn start(back: Arc<Backend>, task: Box<FnBox()+Send>, mut after: Vec<Signal>) {
         // Create the wait signal if needed
-        let signal = if task.wait.len() == 0 {
+        let signal = if after.len() == 0 {
             Signal::pulsed()
-        } else if task.wait.len() == 1 {
-            task.wait.pop().unwrap()
+        } else if after.len() == 1 {
+            after.pop().unwrap()
         } else {
-            Barrier::new(&task.wait).signal()
+            Barrier::new(&after).signal()
         };
 
-        let sig = done_signal.clone();
         signal.callback(move || {
             if !back.active.load(Ordering::SeqCst) {
-                let try_thread = worker::start(ReadyTask {
-                    task: task.inner,
-                    complete_ack: Some((sig, ack)),
-                });
-
+                let fiber = bran::fiber::Fiber::spawn_with(move || task.call_box(()), back.pool.clone());
+                let try_thread = worker::start(ReadyTask(fiber));
                 match try_thread {
                     Ok(b) => b,
                     Err(rt) => {
@@ -118,8 +109,23 @@ impl Backend {
                 };
             }
         });
+    }
 
-        done_signal
+    /// Start a task that will run once all the Handle's have
+    /// been completed.
+    pub fn enqueue(back: Arc<Backend>, task: bran::Handle, after: Signal) {
+        after.callback(move || {
+            if !back.active.load(Ordering::SeqCst) {
+                let try_thread = worker::start(ReadyTask(task));
+                match try_thread {
+                    Ok(b) => b,
+                    Err(rt) => {
+                        back.start_on_global_queue(rt);
+                        true
+                    }
+                };
+            }
+        });
     }
 
     /// Kill the backend, wait until the condition is satisfied.
@@ -172,73 +178,8 @@ impl Backend {
     }
 }
 
-impl<'a> Schedule for (Arc<Backend>, &'a mut Option<(Signal, DoneAck)>)  {
-    fn add_task(&mut self, task: TaskBuilder) -> Handle {
-        Backend::start(self.0.clone(), task, self.1)
-    }
-}
-
-impl<'a> Schedule for &'a mut (Arc<Backend>, &'a mut Option<(Signal, DoneAck)>)  {
-    fn add_task(&mut self, task: TaskBuilder) -> Handle {
-        Backend::start(self.0.clone(), task, self.1)
-    }
-}
-
-/// This is a shareable object to allow multiple
-/// tasks to 
-pub struct DoneAck(Option<Pulse>);
-
-impl DoneAck {
-    fn new(pulse: Pulse) -> DoneAck {
-        DoneAck(Some(pulse))
-    }
-}
-
-impl Drop for DoneAck {
-    fn drop(&mut self) {
-        self.0.take().map(|x| x.pulse());
-    }
-}
-
-/// A structure to help build a task
-pub struct TaskBuilder {
-    /// The task to be run
-    inner: Box<Task+Send>,
-    /// is the task extended or not
-    extend: bool,
-    /// The signals to wait on
-    wait: Vec<Signal>
-}
-
-impl TaskBuilder {
-    /// Create a new TaskBuilder around `t`
-    pub fn new<T>(t: T) -> TaskBuilder where T: IntoTask {
-        TaskBuilder {
-            inner: t.into_task(),
-            extend: false,
-            wait: Vec::new()
-        }
-    }
-
-    /// A task extend will extend the lifetime of the parent task
-    /// Externally to this task the Handle will not show as complete
-    /// until both the parent, and child are completed.
-    ///
-    /// A parent should not wait on the child task if it is extended
-    /// the parent's lifetime. As this will deadlock.
-    pub fn extend(mut self) -> TaskBuilder {
-        self.extend = true;
-        self
-    }
-
-    /// Start the task only after `signal` is asserted
-    pub fn after(mut self, signal: Signal) -> TaskBuilder {
-        self.wait.push(signal);
-        self
-    }
-
-    /// Start the task using the supplied scheduler
-    pub fn start(self, sched: &mut Schedule) -> Signal {
-        sched.add_task(self)
+impl<'a> Schedule for Arc<Backend>  {
+    fn add_task(&mut self, task: Box<FnBox()+Send>, after: Vec<Signal>) {
+        Backend::start(self.clone(), task, after)
     }
 }

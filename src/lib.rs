@@ -12,22 +12,15 @@ extern crate rand;
 extern crate libc;
 extern crate num_cpus;
 extern crate bran;
-
-use pulse::Signal;
+extern crate future_pulse;
 
 mod back;
 mod front;
 mod task;
 mod worker;
-mod fiber;
 
-pub use self::back::TaskBuilder;
 pub use self::front::{Frontend, Schedule};
-pub use self::task::{WaitState, task, Task, ResumableTask, IntoTask};
-pub use self::fiber::fiber;
-
-/// Task handle, used for referencing a task in flight.
-pub type Handle = Signal;
+pub use self::task::{task, TaskBuilder};
 
 /// Wait mode for the front-end termination.
 #[derive(PartialEq, Copy, Clone, Debug)]
