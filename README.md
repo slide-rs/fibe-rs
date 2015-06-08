@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/kvark/fibe-rs.png?branch=master)](https://travis-ci.org/kvark/fibe-rs)
+[![Build Status](https://travis-ci.org/slide-rs/fibe-rs.png?branch=master)](https://travis-ci.org/slide-rs/fibe-rs)
 
 ### Fiberized task queue in Rust
 
