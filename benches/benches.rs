@@ -10,6 +10,13 @@ use test::Bencher;
 use pulse::Signals;
 use future_pulse::Future;
 
+fn warmup(front: &mut fibe::Frontend) {
+    for _ in 0..100 {
+        task(|_| {}).start(front);
+    }
+    task(|_| {}).start(front).get();
+}
+
 #[bench]
 fn start_die(b: &mut Bencher) {
     b.iter(|| {
@@ -33,6 +40,7 @@ fn chain_10_use_die(b: &mut Bencher) {
 #[bench]
 fn chain_10_wait(b: &mut Bencher) {
     let mut front = fibe::Frontend::new();
+    warmup(&mut front);
     b.iter(|| {
         let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..10 {
@@ -57,6 +65,7 @@ fn chain_1_000_use_die(b: &mut Bencher) {
 #[bench]
 fn chain_1_000_wait(b: &mut Bencher) {
     let mut front = fibe::Frontend::new();
+    warmup(&mut front);
     b.iter(|| {
         let mut last = task(move |_| {}).start(&mut front);
         for _ in 1..1_000 {
@@ -81,6 +90,7 @@ fn fibb_steal(depth: usize, front: &mut fibe::Frontend) -> Future<u64> {
 #[bench]
 fn bench_fibb_steal(b: &mut Bencher) {
     let mut front = fibe::Frontend::new();
+    warmup(&mut front);
     b.iter(|| {
         fibb_steal(8, &mut front).wait().unwrap();
     });
@@ -89,6 +99,7 @@ fn bench_fibb_steal(b: &mut Bencher) {
 #[bench]
 fn fanout_1_000(b: &mut Bencher) {
     let mut front = fibe::Frontend::new();
+    warmup(&mut front);
     b.iter(|| {
         let (signal, pulse) = pulse::Signal::new();
         let signals: Vec<pulse::Signal> = (0..1_000).map(|_|
@@ -148,6 +159,7 @@ fn repeat_1_000_x_1_000(b: &mut Bencher) {
 #[bench]
 fn chain_10_fibers(b: &mut Bencher) {
     let mut front = Frontend::new();
+    warmup(&mut front);
     b.iter(|| {
         let (mut s, p) = Future::new();
         for _ in 0..10 {
@@ -161,7 +173,19 @@ fn chain_10_fibers(b: &mut Bencher) {
 #[bench]
 fn spawn(b: &mut Bencher) {
     let mut front = Frontend::new();
+    warmup(&mut front);
+
     b.iter(|| {
         task(|_| {}).start(&mut front).get();
+    });
+}
+
+#[bench]
+fn spawn_get(b: &mut Bencher) {
+    let mut front = Frontend::new();
+    warmup(&mut front);
+
+    b.iter(|| {
+        task(|_| {}).start(&mut front);
     });
 }

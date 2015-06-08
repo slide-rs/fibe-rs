@@ -104,7 +104,8 @@ fn work() {
 
                     if i != 0 {
                         backoff += 5;
-                        unsafe { usleep(backoff) }; 
+                        unsafe { usleep(backoff) };
+                        i = stealers.len();
                     }
                 }
             }
