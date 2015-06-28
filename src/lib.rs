@@ -1,4 +1,4 @@
-#![feature(core, libc)]
+#![feature(libc, fnbox)]
 #![deny(missing_docs)]
 
 //! A simple task queue with dependency tracking.
