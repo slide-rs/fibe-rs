@@ -11,9 +11,11 @@ name = "fibe"
 [dependencies]
 log = "*"
 atom = "*"
-deque = "*"
 rand = "*"
 num_cpus = "*"
+
+[dependencies.deque]
+git = "https://github.com/csherratt/deque.git"
 
 [dependencies.pulse]
 features = ["callback"]
