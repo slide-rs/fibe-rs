@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::thread;
 use std::sync::mpsc::Receiver;
 use std::boxed::FnBox;
+use std::thread::sleep_ms;
 
 use pulse::Signal;
-use libc::funcs::posix88::unistd::usleep;
 use rand::{self, Rng};
 use deque::{self, Stolen};
 use back::{Backend, ReadyTask};
@@ -103,8 +103,8 @@ fn work() {
                     }
 
                     if i != 0 {
-                        backoff += 5;
-                        unsafe { usleep(backoff) };
+                        backoff += 1;
+                        sleep_ms(backoff);
                         i = stealers.len();
                     }
                 }
