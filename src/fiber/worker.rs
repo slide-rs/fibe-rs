@@ -8,7 +8,8 @@ use std::thread::sleep_ms;
 use pulse::Signal;
 use rand::{self, Rng};
 use deque::{self, Stolen};
-use back::{Backend, ReadyTask};
+use super::back::{Backend, ReadyTask};
+use Schedule;
 use bran;
 
 use FnBox;
@@ -130,8 +131,7 @@ pub fn start(rt: ReadyTask) -> Result<bool, ReadyTask> {
 /// used for fibers to give them child task spawning
 pub struct FiberSchedule;
 
-
-impl super::Schedule for FiberSchedule {
+impl Schedule for FiberSchedule {
     fn add_task(&mut self, task: Box<FnBox+Send>, after: Vec<Signal>) {
         let back = WORKER.with(|worker| {
             worker.borrow()

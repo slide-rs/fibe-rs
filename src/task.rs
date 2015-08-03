@@ -1,8 +1,6 @@
 
 use pulse::Signal;
 use future_pulse::Future;
-
-use worker::FiberSchedule;
 use {Schedule, FnBox};
 
 /// A structure to help build a task
@@ -38,8 +36,8 @@ pub fn task<F, T:Send+'static>(f: F) -> TaskBuilder<T>
 
     let (future, set) = Future::new();
     TaskBuilder {
-        task: Box::new(|| {
-            set.set(f(&mut FiberSchedule));
+        task: Box::new(move |sched: &mut Schedule| {
+            set.set(f(sched));
         }),
         wait: Vec::new(),
         result: future

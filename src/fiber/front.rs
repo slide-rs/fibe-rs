@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use pulse::Signal;
 
-use back::Backend;
+use super::back::Backend;
 use {Wait, Schedule, FnBox};
 
 /// Queue front-end.

@@ -7,7 +7,6 @@ use fibe::*;
 use pulse::Signals;
 use future_pulse::Future;
 use timebomb::timeout_ms;
-use std::sync::mpsc::{Sender, channel};
 
 #[test]
 fn die_empty_none() {

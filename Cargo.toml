@@ -13,6 +13,7 @@ log = "*"
 atom = "*"
 rand = "*"
 num_cpus = "*"
+libc = "*"
 
 [dependencies.deque]
 git = "https://github.com/csherratt/deque.git"

@@ -1,4 +1,3 @@
-#![feature(libc)]
 #![deny(missing_docs)]
 
 //! A simple task queue with dependency tracking.
@@ -14,16 +13,15 @@ extern crate num_cpus;
 extern crate bran;
 extern crate future_pulse;
 
-mod back;
-mod front;
+mod fiber;
 mod task;
-mod worker;
 mod fnbox;
+
+pub use fiber::front::Frontend;
 
 use pulse::Signal;
 
 pub use fnbox::FnBox;
-pub use self::front::Frontend;
 pub use self::task::{task, TaskBuilder};
 
 /// Wait mode for the front-end termination.

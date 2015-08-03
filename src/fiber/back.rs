@@ -14,7 +14,7 @@ use deque;
 use num_cpus;
 
 use {Wait, Schedule, FnBox};
-use worker;
+use super::worker;
 
 struct Inner {
     index: usize,
@@ -97,7 +97,9 @@ impl Backend {
 
         signal.callback(move || {
             if !back.active.load(Ordering::SeqCst) {
-                let fiber = bran::fiber::Fiber::spawn_with(move || task.call_box(), back.pool.clone());
+                let fiber = bran::fiber::Fiber::spawn_with(move || {
+                    task.call_box(&mut worker::FiberSchedule)
+                }, back.pool.clone());
                 let try_thread = worker::start(ReadyTask(fiber));
                 match try_thread {
                     Ok(b) => b,
