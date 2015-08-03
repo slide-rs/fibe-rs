@@ -1,15 +1,14 @@
 
-use std::boxed::FnBox;
 use pulse::Signal;
 use future_pulse::Future;
 
 use worker::FiberSchedule;
-use Schedule;
+use {Schedule, FnBox};
 
 /// A structure to help build a task
 pub struct TaskBuilder<T> {
     /// The task to be run
-    task: Box<FnBox()+Send>,
+    task: Box<FnBox+Send>,
 
     /// The signals to wait on
     wait: Vec<Signal>,

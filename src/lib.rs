@@ -1,4 +1,4 @@
-#![feature(libc, fnbox)]
+#![feature(libc)]
 #![deny(missing_docs)]
 
 //! A simple task queue with dependency tracking.
@@ -18,8 +18,12 @@ mod back;
 mod front;
 mod task;
 mod worker;
+mod fnbox;
 
-pub use self::front::{Frontend, Schedule};
+use pulse::Signal;
+
+pub use fnbox::FnBox;
+pub use self::front::Frontend;
 pub use self::task::{task, TaskBuilder};
 
 /// Wait mode for the front-end termination.
@@ -33,3 +37,11 @@ pub enum Wait {
     Pending,
 }
 
+/// Abstract representation of a the scheduler, allow for new tasks
+/// to be created and enqueued.
+pub trait Schedule {
+    /// Add a new task with selected dependencies. This doesn't interrupt any
+    /// tasks in-flight. The task will actually start as soon as all 
+    /// dependencies are finished.
+    fn add_task(&mut self, task: Box<FnBox+Send>, after: Vec<Signal>);
+}
