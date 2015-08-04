@@ -7,15 +7,14 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Sender, Receiver, channel};
 use std::collections::HashMap;
 use std::thread;
-use std::boxed::FnBox;
 
 use bran;
 use pulse::*;
 use deque;
 use num_cpus;
 
-use {Wait, Schedule};
-use worker;
+use {Wait, Schedule, FnBox};
+use super::worker;
 
 struct Inner {
     index: usize,
@@ -86,7 +85,7 @@ impl Backend {
 
     /// Start a task that will run once all the Handle's have
     /// been completed.
-    pub fn start(back: Arc<Backend>, task: Box<FnBox()+Send>, mut after: Vec<Signal>) {
+    pub fn start(back: Arc<Backend>, task: Box<FnBox+Send>, mut after: Vec<Signal>) {
         // Create the wait signal if needed
         let signal = if after.len() == 0 {
             Signal::pulsed()
@@ -98,7 +97,9 @@ impl Backend {
 
         signal.callback(move || {
             if !back.active.load(Ordering::SeqCst) {
-                let fiber = bran::fiber::Fiber::spawn_with(move || task.call_box(()), back.pool.clone());
+                let fiber = bran::fiber::Fiber::spawn_with(move || {
+                    task.call_box(&mut worker::FiberSchedule)
+                }, back.pool.clone());
                 let try_thread = worker::start(ReadyTask(fiber));
                 match try_thread {
                     Ok(b) => b,
@@ -179,7 +180,7 @@ impl Backend {
 }
 
 impl<'a> Schedule for Arc<Backend>  {
-    fn add_task(&mut self, task: Box<FnBox()+Send>, after: Vec<Signal>) {
+    fn add_task(&mut self, task: Box<FnBox+Send>, after: Vec<Signal>) {
         Backend::start(self.clone(), task, after)
     }
 }

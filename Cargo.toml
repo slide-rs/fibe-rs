@@ -1,6 +1,6 @@
 [package]
 name = "fibe"
-version = "0.2.0"
+version = "0.3.0"
 license = "Apache-2.0"
 keywords = ["gamedev"]
 authors = ["Fibe-rs Hackers"]
@@ -8,20 +8,28 @@ authors = ["Fibe-rs Hackers"]
 [lib]
 name = "fibe"
 
+[features]
+default = ["thread"]
+thread = []
+fiber = ["bran", "deque"]
+
 [dependencies]
 log = "*"
 atom = "*"
 rand = "*"
 num_cpus = "*"
-
-[dependencies.deque]
-git = "https://github.com/csherratt/deque.git"
+libc = "*"
 
 [dependencies.pulse]
 features = ["callback"]
 
+[dependencies.deque]
+git = "https://github.com/csherratt/deque.git"
+optional = true
+
 [dependencies.bran]
 git = "https://github.com/slide-rs/bran.git"
+optional = true
 
 [dependencies.future_pulse]
 git = "https://github.com/slide-rs/future_pulse.git"

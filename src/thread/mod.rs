@@ -1,12 +1,13 @@
 //! Front-end module for the task queue. The front-end exists
 //! on the user side, allowing to add more tasks to the queue.
 
+mod back;
+
 use std::sync::Arc;
-use std::boxed::FnBox;
 use pulse::Signal;
 
-use back::Backend;
-use Wait;
+use self::back::Backend;
+use {Wait, Schedule, FnBox};
 
 /// Queue front-end.
 pub struct Frontend {
@@ -38,17 +39,8 @@ impl Drop for Frontend {
     }
 }
 
-/// Abstract representation of a the scheduler, allow for new tasks
-/// to be created and enqueued.
-pub trait Schedule {
-    /// Add a new task with selected dependencies. This doesn't interrupt any
-    /// tasks in-flight. The task will actually start as soon as all 
-    /// dependencies are finished.
-    fn add_task(&mut self, task: Box<FnBox()+Send>, after: Vec<Signal>);
-}
-
 impl Schedule for Frontend {
-    fn add_task(&mut self, task: Box<FnBox()+Send>, after: Vec<Signal>) {
+    fn add_task(&mut self, task: Box<FnBox+Send>, after: Vec<Signal>) {
         Backend::start(self.backend.clone(), task, after)
     }
 }
