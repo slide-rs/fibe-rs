@@ -1,3 +1,7 @@
 language: rust
 rust:
   - nightly
+
+script:
+  - cargo test
+  - cargo test --features fiber --no-default-features
