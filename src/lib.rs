@@ -6,18 +6,34 @@
 extern crate log;
 extern crate pulse;
 extern crate atom;
-extern crate deque;
+
 extern crate rand;
 extern crate libc;
 extern crate num_cpus;
+
+#[cfg(feature="fiber")]
+extern crate deque;
+
+#[cfg(feature="fiber")]
 extern crate bran;
+
 extern crate future_pulse;
 
+#[cfg(feature="fiber")]
 mod fiber;
+
+#[cfg(feature="thread")]
+mod thread;
+
 mod task;
 mod fnbox;
 
+#[cfg(feature="fiber")]
 pub use fiber::front::Frontend;
+
+#[cfg(feature="thread")]
+pub use thread::Frontend;
+
 
 use pulse::Signal;
 
